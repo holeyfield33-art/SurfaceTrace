@@ -124,19 +124,67 @@ Only one approved category of mutation is allowed. Everything else stays identic
 | Guidance layer       | Next *review step* suggestions (advisory only)      |
 | Report generator     | Redacted evidence packages                          |
 
-**Tech choices (planned)**
-- Frontend: React + TypeScript + React Flow / Cytoscape.js
+**Monorepo layout**
+
+```
+packages/
+  core/     # pure domain logic (HAR, graph, threat, experiment, diff, evidence)
+  server/   # Fastify local API
+  web/      # React + Vite UI
+fixtures/   # sample HARs
+docs/       # workflow + architecture
+```
+
+**Tech**
+- Frontend: React + TypeScript + Vite (+ React Flow next)
 - Backend: Node.js / Fastify (local)
-- Storage: SQLite
+- Storage: in-memory for scaffold; SQLite next
 - Import: HAR first
 - Evidence: SHA-256 over canonicalized records
 - AI: optional and advisory only — never owns redaction, scope, rate limits, or diffs
 
 ---
 
+## Getting Started
+
+**Requirements:** Node.js ≥ 20
+
+```bash
+git clone https://github.com/holeyfield33-art/SurfaceTrace.git
+cd SurfaceTrace
+npm install
+
+# terminal 1 — API (http://127.0.0.1:8787)
+npm run dev
+
+# terminal 2 — UI (http://127.0.0.1:5173)
+npm run dev:web
+```
+
+Import `fixtures/sample.har` from the web UI, or:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/import/har \
+  -H 'Content-Type: application/json' \
+  -d @<(jq -n --rawfile h fixtures/sample.har '{har:$h}')
+```
+
+Useful endpoints:
+
+| Method | Path | Purpose |
+|--------|------|--------|
+| GET | `/health` | Liveness + ledger tip |
+| POST | `/import/har` | Body `{ "har": "<string>" }` |
+| GET | `/endpoints` | Normalized endpoint inventory |
+| GET | `/graph` | Nodes + edges |
+| GET | `/hypotheses` | Generated review questions |
+| GET | `/evidence` | Hash-linked ledger |
+
+---
+
 ## Build Order
 
-1. **HAR import → endpoint inventory**  
+1. **HAR import → endpoint inventory** ✅ scaffolded  
    Route normalization, inputs, responses, auth metadata, redaction.
 
 2. **Interactive graph**  
@@ -173,16 +221,6 @@ Support **authorized, local capture + visual mapping + tester-approved experimen
 
 ---
 
-## Getting Started (once code lands)
-
-```bash
-git clone https://github.com/holeyfield33-art/SurfaceTrace.git
-cd SurfaceTrace
-# instructions will appear here as the MVP is built
-```
-
----
-
 ## Inspiration & Alignment
 
 - OWASP Attack Surface Analysis Cheat Sheet
@@ -194,8 +232,8 @@ cd SurfaceTrace
 
 ## License
 
-TBD (likely Apache-2.0 or similar permissive license once initial code is committed).
+Apache-2.0
 
 ---
 
-**Status:** Repository initialized. Core vision and architecture documented. Implementation starting with HAR importer + graph engine.
+**Status:** Monorepo scaffolded. Core domain modules (HAR import, redaction, path templates, graph, hypotheses, one-variable guard, diff, evidence ledger) + Fastify server + React shell are in place. Next: interactive graph canvas and threat cards.
