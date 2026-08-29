@@ -1,80 +1,60 @@
-# SurfaceTrace Tester Workflow
+# SurfaceTrace Investigation Workflow
 
-This document mirrors the original brainstorm flowchart and is the canonical process the UI will enforce.
-
-```
+```text
 START
-  │
-  ▼
-Identify target (authorized scope only)
-  │
-  ▼
-Browse normally (or import HAR)
-  │
-  ▼
-Capture / import requests
-  │
-  ▼
-Inventory endpoints
-  │
-  ▼
-Inventory inputs
-  │
-  ├────────────┬────────────┐
-  │                       │
-  ▼                       ▼
-REQUEST                 RESPONSE
-method/path             status/body
-params/body             headers/links
-cookies                 scripts/comments
-  │                       │
-  └────────────┴────────────┘
-                  │
-                  ▼
-         Build attack surface graph
-                  │
-                  ▼
-            Form hypotheses
-                  │
-                  ▼
-         Change ONE variable only
-                  │
-                  ▼
-             Send request
-                  │
-                  ▼
-           Compare response
-                  │
-      ├───────────┬───────────┐
-      │                       │
-   Different?               Same?
-      │                       │
-      ▼                       ▼
- Investigate              Move on
-      │
-      ▼
-   Record evidence + next hypothesis
-      │
-      ▼
-    Repeat
+  |
+  v
+Confirm authorized scope
+  |
+  v
+Import captured HAR traffic
+  |
+  v
+Map endpoints and inputs
+  |
+  v
+Select an endpoint in the graph
+  |
+  v
+Choose a grounded hypothesis
+  |
+  v
+Lock an imported baseline observation
+  |
+  v
+Declare exactly one changed input
+  |
+  v
+Select the corresponding imported result observation
+  |
+  v
+Compare deterministically
+  |
+  v
+Append experiment and diff evidence
 ```
 
-## Rules the product enforces
+## Enforced Rules
 
-1. **Scope first** — no traffic leaves the defined target boundaries.
-2. **Baseline lock** — every experiment starts from a known, redacted baseline request.
-3. **One variable** — the UI refuses to send a request that differs in more than one approved dimension.
-4. **Deterministic diff** — comparison is code-driven, never an opaque AI judgment.
-5. **Evidence append-only** — every observation, mutation, and result is hashed and chained.
+1. Scope first: only authorized captured traffic belongs in SurfaceTrace.
+2. Baseline lock: every experiment references a known redacted observation.
+3. One variable: the server rejects zero or multiple mutation dimensions.
+4. Relationship integrity: endpoint, hypothesis, input, baseline, and result must belong together.
+5. Deterministic diff: comparison is code-driven and never an AI judgment.
+6. Evidence separation: experiment and diff are distinct hash-linked records.
+7. No active execution: v1 compares imported observations and does not send requests.
 
-## Example experiment card
+## Sample Experiment
 
+```text
+Endpoint:    GET /api/projects/{id}
+Hypothesis:  Does the server enforce ownership and role authorization?
+Baseline:    imported observation for /api/projects/100
+Changed:     path.id from 100 to 200
+Result:      imported observation for /api/projects/200
+Diff:        response size -2 bytes
+State:       different (not "vulnerable")
+Evidence:    observation -> experiment -> diff
 ```
-Baseline:  GET /api/projects/100
-Experiment: GET /api/projects/200
-Changed:   path.projectId only
-Identity:  same session / same role
-Result:    200 with different project data + ownerEmail field
-Status:    investigate — ownership check required
-Evidence:  sha256:...
-```
+
+The tester interprets the difference and decides what evidence or authorized investigation should come next.

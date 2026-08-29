@@ -9,6 +9,8 @@ export {
   bodyShape,
   isSensitiveHeader,
   isSensitiveQueryParam,
+  sanitizeUrl,
+  redactBody,
   REDACTED,
 } from "./har/redact.js";
 
@@ -21,6 +23,7 @@ export { assertOneVariable, describeMutation } from "./experiment/oneVariable.js
 export type { MutationKind } from "./experiment/oneVariable.js";
 
 export { compareObservations } from "./diff/compare.js";
+export type { DeepDiffLimits } from "./diff/compare.js";
 
 export { canonicalize, sha256, hashPayload } from "./evidence/hash.js";
 export { EvidenceLedger } from "./evidence/ledger.js";

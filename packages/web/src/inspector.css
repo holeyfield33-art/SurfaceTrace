@@ -1,0 +1,452 @@
+.http-inspector {
+  margin: 38px 0 48px;
+  border: 1px solid var(--ink);
+  background: var(--cream);
+}
+.inspector-heading {
+  display: grid;
+  grid-template-columns: 1fr minmax(220px, 1fr) minmax(180px, 0.7fr);
+  gap: 24px;
+  align-items: end;
+  padding: 20px 22px;
+  background: var(--ink);
+  color: white;
+}
+.inspector-heading > div > span {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--acid);
+}
+.inspector-heading h2 {
+  margin: 5px 0 0;
+  font:
+    26px "Archivo Black",
+    sans-serif;
+}
+.inspector-heading label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+.inspector-heading select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #77838c;
+  background: #172838;
+  color: white;
+  font:
+    9px "Lucida Console",
+    "Courier New",
+    monospace;
+}
+.inspector-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid var(--ink);
+}
+.inspector-tabs button {
+  padding: 13px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--cream);
+  font-size: 9px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.inspector-tabs button:last-child {
+  border-right: 0;
+}
+.inspector-tabs button.active {
+  background: var(--acid);
+  box-shadow: inset 0 -4px var(--coral);
+}
+.inspector-content {
+  min-height: 260px;
+  background: #101c29;
+  color: #e9eee8;
+}
+.inspector-content pre {
+  margin: 0;
+  padding: 24px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font:
+    12px/1.65 "Lucida Console",
+    "Courier New",
+    monospace;
+}
+.parsed-http {
+  padding: 24px;
+}
+.parsed-http dl {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  margin: 0;
+}
+.parsed-http dt,
+.parsed-http dd {
+  margin: 0;
+  padding: 10px;
+  border-bottom: 1px solid #3b4954;
+  font-size: 10px;
+}
+.parsed-http dt {
+  color: var(--acid);
+}
+.parsed-http h3 {
+  margin: 28px 0 10px;
+  color: var(--coral);
+}
+.parsed-http ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.parsed-http li {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px;
+  border-top: 1px solid #3b4954;
+  font-size: 10px;
+}
+.parsed-http li span {
+  color: #9ba8b0;
+}
+.inspector-diff {
+  padding: 30px;
+}
+.inspector-diff strong {
+  font:
+    22px/1.4 "Newsreader",
+    serif;
+}
+.inspector-diff p,
+.inspector-content > .empty {
+  color: #9ba8b0;
+}
+.inspector-content > .empty {
+  margin: 0;
+  padding: 30px;
+}
+.identity-context {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--ink);
+  background: var(--acid);
+  font-size: 9px;
+}
+.identity-context strong {
+  margin-right: auto;
+}
+.identity-comparison {
+  margin: 45px 0;
+  padding: 28px;
+  border: 1px solid var(--ink);
+  background: var(--cream);
+}
+.identity-comparison h2 {
+  margin: 10px 0;
+  font:
+    32px "Archivo Black",
+    sans-serif;
+}
+.identity-comparison > p {
+  font:
+    16px/1.4 "Newsreader",
+    serif;
+}
+.identity-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 24px 0;
+}
+.identity-pair label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 9px;
+}
+.identity-pair select {
+  padding: 12px;
+  border: 1px solid var(--ink);
+  background: white;
+  font:
+    10px "Lucida Console",
+    monospace;
+}
+.identity-change {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 20px 0;
+  padding: 18px;
+  border-left: 6px solid var(--coral);
+  background: #f9e8e2;
+}
+.identity-change span,
+.identity-change small {
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+.identity-change strong {
+  font:
+    21px "Newsreader",
+    serif;
+}
+.identity-diff dl {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+}
+.identity-diff dt,
+.identity-diff dd {
+  margin: 0;
+  padding: 9px;
+  border-top: 1px solid var(--line);
+  font-size: 9px;
+}
+.authorization-questions {
+  margin-top: 28px;
+  padding: 20px;
+  background: var(--ink);
+  color: white;
+}
+.authorization-questions h3 {
+  margin-top: 0;
+  color: var(--acid);
+}
+.authorization-questions p {
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid #46535d;
+  font:
+    15px/1.35 "Newsreader",
+    serif;
+}
+.experiment-notebook {
+  margin: 45px 0;
+  border: 1px solid var(--ink);
+  background: var(--cream);
+}
+.notebook-title {
+  padding: 25px;
+  background: var(--acid);
+}
+.notebook-title h2 {
+  margin: 8px 0 0;
+  font:
+    32px "Archivo Black",
+    sans-serif;
+}
+.experiment-filters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--ink);
+  border-block: 1px solid var(--ink);
+}
+.experiment-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+  background: var(--cream);
+  font-size: 8px;
+}
+.experiment-filters select,
+.experiment-detail select,
+.experiment-detail textarea {
+  padding: 10px;
+  border: 1px solid var(--ink);
+  background: white;
+  font:
+    9px "Lucida Console",
+    monospace;
+}
+.notebook-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) 1.5fr;
+}
+.experiment-list {
+  border-right: 1px solid var(--ink);
+}
+.experiment-list button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--cream);
+  text-align: left;
+  cursor: pointer;
+}
+.experiment-list button.selected {
+  background: #f0f6c9;
+  box-shadow: inset 5px 0 var(--coral);
+}
+.experiment-list span,
+.experiment-list small {
+  font-size: 8px;
+}
+.experiment-detail {
+  min-width: 0;
+  padding: 24px;
+}
+.experiment-detail > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--ink);
+}
+.experiment-detail h3 {
+  margin: 24px 0 8px;
+}
+.experiment-detail pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  background: var(--ink);
+  color: white;
+  white-space: pre-wrap;
+  font:
+    9px/1.5 "Lucida Console",
+    monospace;
+}
+.experiment-detail textarea {
+  width: 100%;
+  min-height: 90px;
+}
+.experiment-detail button {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: white;
+  font-size: 9px;
+}
+.changed-only {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-left: 6px solid var(--coral);
+  background: #f9e8e2;
+}
+.candidate-boundary {
+  padding: 14px;
+  border: 1px solid var(--coral);
+  background: #f9e8e2;
+  font:
+    16px "Newsreader",
+    serif;
+}
+.deep-diff {
+  border: 1px solid var(--line);
+  background: var(--cream);
+  color: var(--ink);
+}
+.deep-diff-summary {
+  padding: 16px;
+  border-bottom: 1px solid var(--ink);
+}
+.deep-diff-summary > strong,
+.diff-facts b {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: var(--coral);
+}
+.deep-diff-summary p {
+  margin: 7px 0;
+  font:
+    16px/1.35 "Newsreader",
+    serif;
+}
+.deep-diff-summary > span {
+  font-size: 9px;
+  color: var(--coral);
+}
+.diff-facts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid var(--ink);
+}
+.diff-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+}
+.diff-facts > div:last-child {
+  border-right: 0;
+}
+.diff-facts span {
+  font-size: 9px;
+  word-break: break-word;
+}
+.field-changes details {
+  border-bottom: 1px solid var(--line);
+}
+.field-changes summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 12px;
+  cursor: pointer;
+}
+.field-changes summary span {
+  font-size: 8px;
+  color: var(--coral);
+}
+.field-changes dl {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  margin: 0;
+  padding: 0 12px 12px;
+}
+.field-changes dt,
+.field-changes dd {
+  margin: 0;
+  padding: 7px;
+  border-top: 1px solid var(--line);
+  font-size: 9px;
+  word-break: break-word;
+}
+.field-changes > p {
+  padding: 14px;
+  font-size: 9px;
+}
+
+@media (max-width: 800px) {
+  .inspector-heading {
+    grid-template-columns: 1fr;
+  }
+  .identity-context,
+  .identity-pair,
+  .experiment-filters,
+  .notebook-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .diff-facts {
+    grid-template-columns: 1fr 1fr;
+  }
+  .inspector-tabs button {
+    padding-inline: 5px;
+    font-size: 8px;
+  }
+  .parsed-http li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

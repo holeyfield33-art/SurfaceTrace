@@ -1,0 +1,25 @@
+services:
+  surfacetrace:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    init: true
+    working_dir: /workspace/SurfaceTrace
+    volumes:
+      - .:/workspace/SurfaceTrace
+      - surfacetrace-node-modules:/workspace/SurfaceTrace/node_modules
+    ports:
+      - "5173:5173"
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      MAX_HAR_BODY_BYTES: "10485760"
+      MAX_HAR_ENTRIES: "5000"
+      CORS_ORIGINS: "http://127.0.0.1:5173,http://localhost:5173"
+      npm_config_update_notifier: "false"
+      npm_config_fund: "false"
+      npm_config_audit: "false"
+volumes:
+  surfacetrace-node-modules:

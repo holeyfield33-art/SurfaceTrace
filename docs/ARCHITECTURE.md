@@ -1,52 +1,55 @@
-# SurfaceTrace Architecture (v1)
+# SurfaceTrace Architecture
 
-Local-first, deterministic core with an optional advisory guidance layer.
+SurfaceTrace is a local-first, deterministic investigation command center with an integrated static learning layer.
 
 ## Module Boundaries
 
-```
-surfacetrace/
-├── packages/
-│   ├── core/                 # pure TypeScript domain logic (no UI, no network)
-│   │   ├── har/             # HAR parser + normalizer
-│   │   ├── graph/           # nodes, edges, route templating
-│   │   ├── threat/          # boundaries, assets, priority scoring, STRIDE prompts
-│   │   ├── experiment/      # baseline lock + one-variable mutation rules
-│   │   ├── diff/            # deterministic response comparison
-│   │   └── evidence/        # hash-linked ledger (SHA-256)
-│   ├── server/               # Fastify local API + SQLite
-│   └── web/                  # React + TypeScript + React Flow canvas
-├── fixtures/                 # sample redacted HARs for tests
-└── docs/
+```text
+packages/
+  core/       Pure TypeScript HAR, graph, threat, experiment, diff, and evidence logic
+  server/     Bounded Fastify local API with in-memory milestone state
+  web/        React cockpit, static curriculum, and contextual lesson mappings
+fixtures/     Authorized, synthetic HAR data used by tests and demos
+docs/         Architecture and workflow documentation
 ```
 
 ## Data Flow
 
-1. **Import** — HAR (or future proxy export) enters the importer.
-2. **Redact** — secrets stripped before any persistence.
-3. **Normalize** — requests become endpoint templates + input descriptors.
-4. **Graph** — nodes/edges materialize; trust boundaries can be annotated.
-5. **Hypothesize** — signals generate review questions (not exploit payloads).
-6. **Experiment** — tester declares exactly one change; system clones & mutates.
-7. **Diff** — pure comparison produces a structured card.
-8. **Ledger** — observation + experiment + diff + notes are hashed and appended.
-9. **Export** — redacted evidence package (markdown + JSON + hashes).
+1. Import: a HAR enters the bounded local API.
+2. Redact: query secrets and sensitive request data are removed before observation creation or hashing.
+3. Normalize: requests become endpoint templates and value-free input descriptors.
+4. Map: endpoint, input, observation, and hypothesis relationships become graph data.
+5. Hypothesize: deterministic signals generate security questions, never vulnerability claims.
+6. Learn: deterministic mappings recommend static lessons for the current investigation context.
+7. Preserve: normalized import summaries enter the append-only hash-linked evidence ledger.
+8. Experiment: the tester chooses two imported observations and declares exactly one changed input.
+9. Validate: the API verifies endpoint, hypothesis, input, and observation relationships before comparison.
+10. Compare: a deterministic diff produces a `same` or `different` state and appends separate experiment and diff evidence records.
+
+## Input Model
+
+Input descriptors contain a name, location, inferred type, endpoint relationship, sensitivity, and observed count. Supported locations are path, query, JSON body, form body, selected security-relevant headers, and cookies. Cookie values and sensitive values are never retained in descriptors.
 
 ## Invariants
 
-- Redaction happens before storage.
-- Scope and rate limits are enforced in code, not by hope.
+- Redaction occurs before normalized storage and content hashing.
+- Raw query and cookie secrets do not enter API inventory or evidence.
+- Only HTTP and HTTPS observations are accepted.
+- HAR byte and entry limits are configurable and enforced by the API.
+- Malformed entries are skipped without discarding valid entries.
+- Local API CORS permits configured local development origins only.
+- Observations, hypotheses, experiments, evidence, and conclusions remain distinct.
 - Diffs and evidence hashes are deterministic.
-- AI (if present) is advisory only and never decides vulnerability or severity.
-- No autonomous active scanning in v1.
+- No autonomous scanning or active request execution exists in this milestone; experiments compare imported captures only.
 
-## Storage
+## State And Storage
 
-SQLite for v1. Graph can live in ordinary relational tables; a later migration to a dedicated graph store is optional.
+Investigation data is held in memory. Lesson proficiency and the current endpoint/lesson context use local browser storage so users can switch between investigating and learning without losing focus. SQLite persistence is planned but not implemented.
 
-## Security Posture of the Tool Itself
+## Learning Boundary
 
-- Local-only by default.
-- No cloud upload of raw sessions.
-- Explicit authorization record required before any experiment can be run.
-- Stop conditions (production impact, real-user data) are first-class.
+The curriculum is a static manifest in `packages/web/src/lessons`. Recommendations map observed methods, input locations, and hypothesis signals to lessons without an LLM. The classroom is not an LMS and does not infer that a vulnerability exists.
+
+## Future Boundaries
+
+SQLite persistence, active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. Scope, authorization, rate controls, and stop conditions must be implemented before active execution is enabled.

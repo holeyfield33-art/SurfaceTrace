@@ -62,6 +62,40 @@ export function redactQueryParams(
   return out;
 }
 
+export function sanitizeUrl(raw: string): string {
+  const url = new URL(raw);
+  for (const name of [...url.searchParams.keys()]) {
+    if (isSensitiveQueryParam(name)) url.searchParams.set(name, REDACTED);
+  }
+  return url.toString();
+}
+
+export function redactBody(text: string | undefined | null, mimeType = ""): string | null {
+  if (!text || text.trim().length === 0) return null;
+  if (mimeType.toLowerCase().includes("json")) {
+    try { return JSON.stringify(redactValue(JSON.parse(text) as unknown), null, 2); } catch { return redactTextSecrets(text); }
+  }
+  if (mimeType.toLowerCase().includes("x-www-form-urlencoded")) {
+    const params = new URLSearchParams(text);
+    for (const name of [...params.keys()]) if (isSensitiveQueryParam(name)) params.set(name, REDACTED);
+    return params.toString();
+  }
+  return redactTextSecrets(text);
+}
+
+function redactTextSecrets(text: string): string {
+  return text.replace(/((?:token|secret|password|passwd|api[_-]?key|authorization|session)\s*[=:]\s*)([^&\s,;]+)/gi, `$1${REDACTED}`);
+}
+
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+    key,
+    isSensitiveQueryParam(key) || key.toLowerCase() === "authorization" ? REDACTED : redactValue(child),
+  ]));
+}
+
 /**
  * Replace values of likely-sensitive JSON keys with [REDACTED].
  * Returns a shape string (keys + types), not full values, for storage.

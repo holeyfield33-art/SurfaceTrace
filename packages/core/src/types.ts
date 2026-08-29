@@ -17,20 +17,34 @@ export type InputLocation =
   | "path"
   | "header"
   | "cookie"
-  | "body"
-  | "form";
+  | "body-json"
+  | "body-form";
 
-export type IdentityRole = "anonymous" | "user" | "admin" | "service" | "unknown";
+export type IdentityRole =
+  | "anonymous"
+  | "user"
+  | "admin"
+  | "service"
+  | "unknown";
 
 export type AssetSensitivity = "low" | "medium" | "high" | "critical";
 
 export type ExperimentStatus =
-  | "planned"
-  | "sent"
+  | "open"
+  | "investigating"
   | "same"
   | "different"
   | "needs_review"
-  | "error";
+  | "candidate_finding"
+  | "closed";
+
+export type TesterConclusion =
+  | "no_meaningful_difference"
+  | "expected_difference"
+  | "unexpected_difference"
+  | "needs_more_testing"
+  | "potential_security_issue"
+  | "not_reproducible";
 
 export type NodeKind =
   | "endpoint"
@@ -75,14 +89,17 @@ export interface InputDescriptor {
   name: string;
   location: InputLocation;
   sampleTypes: string[];
+  sensitivity: "normal" | "sensitive";
+  observedCount: number;
   appearsRequired: boolean | null;
 }
 
 export interface IdentityContext {
   id: string;
+  label: string;
   role: IdentityRole;
-  sessionHint: string | null;
-  authMechanism: string | null;
+  notes: string | null;
+  associatedObservationIds: string[];
 }
 
 export interface Asset {
@@ -116,6 +133,34 @@ export interface Observation {
   capturedAt: string;
   redacted: boolean;
   contentHash: string;
+  http: SafeHttpTransaction;
+  parsedInputs: ObservationInput[];
+  identityId: string | null;
+}
+
+export interface SafeHttpTransaction {
+  request: {
+    httpVersion: string;
+    target: string;
+    headers: Record<string, string>;
+    cookies: Record<string, string>;
+    query: Record<string, string>;
+    body: string | null;
+  };
+  response: {
+    httpVersion: string;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    body: string | null;
+  };
+}
+
+export interface ObservationInput {
+  name: string;
+  location: InputLocation;
+  type: string;
+  sensitive: boolean;
 }
 
 export interface Hypothesis {
@@ -139,13 +184,23 @@ export interface ExperimentMutation {
 
 export interface Experiment {
   id: string;
+  endpointId: string;
   baselineObservationId: string;
   hypothesisId: string | null;
   mutation: ExperimentMutation;
+  mutationDescription: string;
+  comparisonClassification: "controlled" | "observational";
+  requestDifferences: string[];
+  diff: DiffCard;
+  baselineIdentityId: string | null;
+  resultIdentityId: string | null;
   status: ExperimentStatus;
   resultObservationId: string | null;
+  conclusion: TesterConclusion | null;
   notes: string | null;
+  evidenceIds: string[];
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DiffCard {
@@ -157,8 +212,26 @@ export interface DiffCard {
   headerChanges: string[];
   jsonKeysAdded: string[];
   jsonKeysRemoved: string[];
+  bodyChanges: BodyChange[];
+  bodyChangeCount: number;
+  bodyComparison: "identical" | "different" | "non_json";
+  truncated: boolean;
+  truncationReason: "max_depth" | "max_nodes" | "max_diff_records" | null;
   summary: string;
   confidence: "single" | "reproduced";
+}
+
+export type BodyChangeType =
+  | "added"
+  | "removed"
+  | "value_changed"
+  | "type_changed"
+  | "array_length_changed";
+export interface BodyChange {
+  path: string;
+  changeType: BodyChangeType;
+  before: unknown;
+  after: unknown;
 }
 
 export interface EvidenceRecord {

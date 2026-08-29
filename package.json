@@ -10,7 +10,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspace=@surfacetrace/server",
-    "dev:web": "npm run dev --workspace=@surfacetrace/web",
+    "dev:web": "npm run dev --workspace=@surfacetrace/web -- --host 0.0.0.0",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
