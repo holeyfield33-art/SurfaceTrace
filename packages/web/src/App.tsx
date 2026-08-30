@@ -192,6 +192,19 @@ interface Inventory {
   trustBoundaries?: BoundaryAnnotation[];
   graph?: GraphView;
   scope?: ProjectScope | null;
+  coverage?: EvidenceCoverageReport;
+}
+
+interface EvidenceCoverageReport {
+  importedObservationCount: number;
+  endpointCount: number;
+  hostCount: number;
+  captureTimeRange: { first: string | null; last: string | null };
+  methodsRepresented: string[];
+  identityContextsRepresented: string[];
+  findings: Array<{ title: string; detail: string }>;
+  questions: string[];
+  disclaimer: string;
 }
 interface ProjectScope {
   id?: string;
@@ -521,6 +534,65 @@ function CommandCenter({
           </code>
           <small>{inventory.observations.length} normalized observations</small>
         </div>
+      </section>
+      <section className="panel evidence-coverage-panel">
+        <PanelLabel number="06" label="EVIDENCE COVERAGE" />
+        {inventory.coverage ? (
+          <>
+            <div className="coverage-grid">
+              <div>
+                <strong>{inventory.coverage.importedObservationCount}</strong>
+                <span>Imported observations</span>
+              </div>
+              <div>
+                <strong>{inventory.coverage.endpointCount}</strong>
+                <span>Endpoints</span>
+              </div>
+              <div>
+                <strong>{inventory.coverage.hostCount}</strong>
+                <span>Hosts</span>
+              </div>
+              <div>
+                <strong>
+                  {inventory.coverage.methodsRepresented.join(", ")}
+                </strong>
+                <span>HTTP methods represented</span>
+              </div>
+            </div>
+            <p className="coverage-disclaimer">
+              {inventory.coverage.disclaimer}
+            </p>
+            <div className="coverage-window">
+              <b>Capture range</b>
+              <code>
+                {inventory.coverage.captureTimeRange.first ?? "Unknown"} -{" "}
+                {inventory.coverage.captureTimeRange.last ?? "Unknown"}
+              </code>
+            </div>
+            <div className="coverage-list">
+              {inventory.coverage.findings.map((item, index) => (
+                <article key={`${item.title}:${index}`}>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            <div className="coverage-questions">
+              {inventory.coverage.questions.map((question) => (
+                <span key={question}>{question}</span>
+              ))}
+            </div>
+            <div className="coverage-identities">
+              <small>
+                Identities: {inventory.coverage.identityContextsRepresented.join(
+                  ", ",
+                )}
+              </small>
+            </div>
+          </>
+        ) : (
+          <Empty text="Import evidence to review coverage questions." />
+        )}
       </section>
       <ScopePanel
         key={scope?.id ?? "no-scope"}

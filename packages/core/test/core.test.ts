@@ -4,6 +4,7 @@ import {
   REDACTED,
   assertOneVariable,
   bodyShape,
+  buildEvidenceCoverage,
   buildGraph,
   compareObservations,
   generateHypotheses,
@@ -152,6 +153,85 @@ describe("route normalization", () => {
       observations: [],
       skippedEntries: 1,
     });
+  });
+});
+
+describe("evidence coverage", () => {
+  test("reports passive evidence gaps deterministically", () => {
+    const report = buildEvidenceCoverage({
+      observations: [
+        {
+          id: "obs-1",
+          endpointId: "ep-1",
+          method: "GET",
+          url: "https://example.test/api/projects/100",
+          pathTemplate: "/api/projects/{id}",
+          requestHeaders: { Authorization: "[REDACTED]" },
+          requestBodyShape: null,
+          responseStatus: 302,
+          responseHeaders: { Location: "https://example.test/login" },
+          responseBodyShape: null,
+          responseSize: 0,
+          capturedAt: "2026-08-30T10:00:00.000Z",
+          redacted: true,
+          contentHash: "hash-1",
+          http: {
+            request: {
+              httpVersion: "HTTP/1.1",
+              target: "/api/projects/100",
+              headers: { Authorization: "[REDACTED]" },
+              cookies: {},
+              query: {},
+              body: null,
+            },
+            response: {
+              httpVersion: "HTTP/1.1",
+              status: 302,
+              statusText: "Found",
+              headers: { Location: "/login" },
+              body: null,
+            },
+          },
+          parsedInputs: [],
+          identityId: null,
+        },
+      ],
+      inputs: [],
+      hypotheses: [
+        {
+          id: "hyp-1",
+          endpointId: "ep-1",
+          question: "Review object access policy",
+          signal: "object-id-in-path-or-input",
+          strideCategory: null,
+          priority: 5,
+          status: "open",
+          observationIds: [],
+          experimentIds: [],
+          assetIds: [],
+          trustBoundaryIds: [],
+          evidenceIds: [],
+          notes: null,
+          provenance: "inferred",
+        },
+      ],
+    });
+    expect(report).toMatchObject({
+      importedObservationCount: 1,
+      endpointCount: 1,
+      hostCount: 1,
+      methodsRepresented: ["GET"],
+      identityContextsRepresented: ["Unassigned"],
+      disclaimer:
+        "Imported coverage is not proof of complete application coverage.",
+    });
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "Observed only once" }),
+        expect.objectContaining({ title: "Potential evidence gap" }),
+        expect.objectContaining({ title: "No comparison observation" }),
+      ]),
+    );
   });
 });
 

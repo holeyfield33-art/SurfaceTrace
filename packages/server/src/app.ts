@@ -6,6 +6,7 @@ import {
   REDACTED,
   assertOneVariable,
   buildGraph,
+  buildEvidenceCoverage,
   compareObservations,
   bodyShape,
   describeMutation,
@@ -1004,6 +1005,11 @@ export function buildApp(options: AppOptions = {}) {
       experiments,
       graph: lastGraph,
       evidence: ledger.all(),
+      coverage: buildEvidenceCoverage({
+        observations: lastImport.observations,
+        inputs: lastImport.inputs,
+        hypotheses: lastHypotheses,
+      }),
       scope: projectScope,
     };
   });
