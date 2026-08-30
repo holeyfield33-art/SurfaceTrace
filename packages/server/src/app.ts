@@ -38,6 +38,7 @@ import type {
   InputDescriptor,
   Observation,
   ProjectScope,
+  StructuredConclusion,
   TesterConclusion,
   TrustBoundary,
   TrustBoundaryType,
@@ -64,6 +65,11 @@ const TESTER_CONCLUSIONS = new Set<TesterConclusion>([
   "needs_more_testing",
   "potential_security_issue",
   "not_reproducible",
+]);
+const EVIDENCE_READINESS = new Set<StructuredConclusion["evidenceReadiness"]>([
+  "incomplete_evidence",
+  "needs_reproduction",
+  "ready_for_peer_review",
 ]);
 const ASSET_CATEGORIES = new Set<AssetCategory>([
   "pii",
@@ -1301,6 +1307,7 @@ export function buildApp(options: AppOptions = {}) {
     Body: {
       status?: ExperimentStatus;
       conclusion?: TesterConclusion | null;
+      structuredConclusion?: Partial<StructuredConclusion> | null;
       notes?: string;
     };
   }>("/experiments/:experimentId", async (request, reply) => {
@@ -1318,14 +1325,39 @@ export function buildApp(options: AppOptions = {}) {
       !TESTER_CONCLUSIONS.has(body.conclusion)
     )
       return reply.status(400).send({ error: "Invalid tester conclusion" });
+    const structured = body.structuredConclusion;
+    if (structured != null) {
+      if (
+        structured.evidenceReadiness !== undefined &&
+        structured.evidenceReadiness !== null &&
+        !EVIDENCE_READINESS.has(structured.evidenceReadiness)
+      )
+        return reply.status(400).send({ error: "Invalid evidence readiness" });
+      if (
+        structured.evidenceReadiness === "ready_for_peer_review" &&
+        !structured.supportingEvidence?.trim()
+      )
+        return reply
+          .status(400)
+          .send({ error: "Peer review readiness requires evidence links" });
+      if (
+        structured.shouldStopTesting === true &&
+        body.status !== undefined &&
+        body.status !== "closed"
+      )
+        return reply
+          .status(400)
+          .send({ error: "Stop decision must close the experiment" });
+    }
     if (
       body.status === undefined &&
       body.conclusion === undefined &&
+      body.structuredConclusion === undefined &&
       body.notes === undefined
     )
       return reply
         .status(400)
-        .send({ error: "Status, conclusion, or notes required" });
+        .send({ error: "Status, conclusion, structured conclusion, or notes required" });
     const evidence = [];
     if (body.status !== undefined && body.status !== experiment.status) {
       experiment.status = body.status;
@@ -1349,6 +1381,66 @@ export function buildApp(options: AppOptions = {}) {
           conclusion: body.conclusion,
         }),
       );
+    }
+    if (structured != null) {
+      const previous = experiment.structuredConclusion ?? null;
+      const next = {
+        whatChanged:
+          structured.whatChanged !== undefined
+            ? redactBody(structured.whatChanged, "text/plain")
+            : previous?.whatChanged ?? null,
+        whatRemainedConstant:
+          structured.whatRemainedConstant !== undefined
+            ? redactBody(structured.whatRemainedConstant, "text/plain")
+            : previous?.whatRemainedConstant ?? null,
+        expectedPolicy:
+          structured.expectedPolicy !== undefined
+            ? redactBody(structured.expectedPolicy, "text/plain")
+            : previous?.expectedPolicy ?? null,
+        supportingEvidence:
+          structured.supportingEvidence !== undefined
+            ? redactBody(structured.supportingEvidence, "text/plain")
+            : previous?.supportingEvidence ?? null,
+        unknowns:
+          structured.unknowns !== undefined
+            ? redactBody(structured.unknowns, "text/plain")
+            : previous?.unknowns ?? null,
+        reproduced:
+          structured.reproduced !== undefined
+            ? structured.reproduced
+            : previous?.reproduced ?? null,
+        realUserDataEncountered:
+          structured.realUserDataEncountered !== undefined
+            ? structured.realUserDataEncountered
+            : previous?.realUserDataEncountered ?? null,
+        shouldStopTesting:
+          structured.shouldStopTesting !== undefined
+            ? structured.shouldStopTesting
+            : previous?.shouldStopTesting ?? null,
+        evidenceReadiness:
+          structured.evidenceReadiness !== undefined
+            ? structured.evidenceReadiness
+            : previous?.evidenceReadiness ?? null,
+      } satisfies StructuredConclusion;
+      experiment.structuredConclusion = next;
+      evidence.push(
+        ledger.append("note", {
+          event: "structured_conclusion_updated",
+          experimentId: experiment.id,
+          readiness: next.evidenceReadiness,
+          stopTesting: next.shouldStopTesting,
+        }),
+      );
+      if (next.shouldStopTesting === true && experiment.status !== "closed") {
+        experiment.status = "closed";
+        evidence.push(
+          ledger.append("note", {
+            event: lifecycleEvent({ status: "closed" }),
+            experimentId: experiment.id,
+            status: "closed",
+          }),
+        );
+      }
     }
     if (body.notes !== undefined) {
       experiment.notes = redactBody(body.notes, "text/plain");
@@ -1482,6 +1574,7 @@ export function buildApp(options: AppOptions = {}) {
       status: "investigating",
       resultObservationId: result.id,
       conclusion: null,
+      structuredConclusion: null,
       notes: redactBody(body.notes?.trim(), "text/plain"),
       evidenceIds: [],
       createdAt,

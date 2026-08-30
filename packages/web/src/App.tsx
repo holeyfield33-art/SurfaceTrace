@@ -138,6 +138,7 @@ interface ExperimentRecord {
   requestDifferences: string[];
   diff: DiffView;
   conclusion: string | null;
+  structuredConclusion?: StructuredConclusion | null;
   notes: string | null;
   status: string;
   evidenceIds: string[];
@@ -193,6 +194,18 @@ interface Inventory {
   graph?: GraphView;
   scope?: ProjectScope | null;
   coverage?: EvidenceCoverageReport;
+}
+
+interface StructuredConclusion {
+  whatChanged: string | null;
+  whatRemainedConstant: string | null;
+  expectedPolicy: string | null;
+  supportingEvidence: string | null;
+  unknowns: string | null;
+  reproduced: boolean | null;
+  realUserDataEncountered: boolean | null;
+  shouldStopTesting: boolean | null;
+  evidenceReadiness: "incomplete_evidence" | "needs_reproduction" | "ready_for_peer_review" | null;
 }
 
 interface EvidenceCoverageReport {
@@ -2246,8 +2259,200 @@ function ExperimentDetail({
           <option value={value} key={value}>
             {label}
           </option>
-        ))}
+          ))}
       </select>
+      <h3>ESTABLISHED</h3>
+      <div className="structured-grid">
+        <label>
+          What changed?
+          <textarea
+            aria-label="What changed"
+            value={experiment.structuredConclusion?.whatChanged ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  whatChanged: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What remained constant?
+          <textarea
+            aria-label="What remained constant"
+            value={experiment.structuredConclusion?.whatRemainedConstant ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  whatRemainedConstant: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What policy was expected?
+          <textarea
+            aria-label="Expected policy"
+            value={experiment.structuredConclusion?.expectedPolicy ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  expectedPolicy: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What evidence supports that policy?
+          <textarea
+            aria-label="Supporting evidence"
+            value={experiment.structuredConclusion?.supportingEvidence ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  supportingEvidence: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+      </div>
+      <h3>NOT ESTABLISHED</h3>
+      <div className="structured-grid">
+        <label>
+          What remains unknown?
+          <textarea
+            aria-label="Unknowns"
+            value={experiment.structuredConclusion?.unknowns ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  unknowns: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          Was the behavior reproduced?
+          <select
+            aria-label="Reproduced"
+            value={
+              experiment.structuredConclusion?.reproduced === null ||
+              experiment.structuredConclusion?.reproduced === undefined
+                ? ""
+                : String(experiment.structuredConclusion.reproduced)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  reproduced:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+        <label>
+          Was real user data encountered?
+          <select
+            aria-label="Real user data"
+            value={
+              experiment.structuredConclusion?.realUserDataEncountered === null ||
+              experiment.structuredConclusion?.realUserDataEncountered === undefined
+                ? ""
+                : String(experiment.structuredConclusion.realUserDataEncountered)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  realUserDataEncountered:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      </div>
+      <h3>TESTER CONCLUSION</h3>
+      <div className="structured-grid">
+        <label>
+          Should testing stop?
+          <select
+            aria-label="Should testing stop"
+            value={
+              experiment.structuredConclusion?.shouldStopTesting === null ||
+              experiment.structuredConclusion?.shouldStopTesting === undefined
+                ? ""
+                : String(experiment.structuredConclusion.shouldStopTesting)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  shouldStopTesting:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+        <label>
+          Evidence readiness
+          <select
+            aria-label="Evidence readiness"
+            value={experiment.structuredConclusion?.evidenceReadiness ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  evidenceReadiness: (event.target.value ||
+                    null) as StructuredConclusion["evidenceReadiness"],
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="incomplete_evidence">Incomplete evidence</option>
+            <option value="needs_reproduction">Needs reproduction</option>
+            <option value="ready_for_peer_review">Ready for peer review</option>
+          </select>
+        </label>
+      </div>
+      <h3>STOP DECISION</h3>
+      <p>
+        {experiment.structuredConclusion?.shouldStopTesting
+          ? "Testing should stop. The existing experiment close state will prevent further execution."
+          : "Testing may continue while the experiment remains open."}
+      </p>
       <h3>NOTES</h3>
       <textarea
         aria-label="Experiment notes"

@@ -772,6 +772,90 @@ describe("local API trust boundary", () => {
     await app.close();
   });
 
+  test("persists structured human conclusions and enforces peer-review readiness", async () => {
+    const app = buildApp({ logger: false });
+    await app.inject({
+      method: "POST",
+      url: "/import/har",
+      payload: { har: sample },
+    });
+    const inventory = (
+      await app.inject({ method: "GET", url: "/inventory" })
+    ).json();
+    const endpoint = inventory.endpoints.find(
+      (item: { pathTemplate: string }) =>
+        item.pathTemplate === "/api/projects/{id}",
+    );
+    const observations = inventory.observations.filter(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const hypothesis = inventory.hypotheses.find(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const input = inventory.inputs.find(
+      (item: { endpointId: string; location: string }) =>
+        item.endpointId === endpoint.id && item.location === "path",
+    );
+    const created = await app.inject({
+      method: "POST",
+      url: "/experiments",
+      payload: {
+        endpointId: endpoint.id,
+        hypothesisId: hypothesis.id,
+        inputId: input.id,
+        baselineObservationId: observations[0].id,
+        resultObservationId: observations[1].id,
+        mutation: { pathParam: { name: "id", from: "100", to: "200" } },
+      },
+    });
+    const experiment = created.json().experiment;
+    const rejected = await app.inject({
+      method: "PATCH",
+      url: `/experiments/${experiment.id}`,
+      payload: {
+        structuredConclusion: {
+          evidenceReadiness: "ready_for_peer_review",
+          supportingEvidence: "",
+        },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error).toContain("evidence links");
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/experiments/${experiment.id}`,
+      payload: {
+        structuredConclusion: {
+          whatChanged: "path id changed from 100 to 200",
+          whatRemainedConstant: "method, host, and route shape remained constant",
+          expectedPolicy: "Object ownership should be enforced consistently",
+          supportingEvidence: "experiment:" + experiment.id,
+          unknowns: "Need a peer to verify account ownership context",
+          reproduced: true,
+          realUserDataEncountered: false,
+          shouldStopTesting: true,
+          evidenceReadiness: "ready_for_peer_review",
+        },
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().experiment).toMatchObject({
+      status: "closed",
+      structuredConclusion: {
+        whatChanged: "path id changed from 100 to 200",
+        shouldStopTesting: true,
+        evidenceReadiness: "ready_for_peer_review",
+      },
+    });
+    const evidence = (await app.inject({ method: "GET", url: "/evidence" })).json();
+    expect(JSON.stringify(evidence)).not.toContain("private");
+    expect(
+      evidence.records.slice(-2).map((item: { payload: { event: string } }) => item.payload.event),
+    ).toEqual(expect.arrayContaining(["structured_conclusion_updated", "experiment_closed"]));
+    await app.close();
+  });
+
   test("classifies a one-variable imported comparison as controlled", async () => {
     const har = JSON.parse(sample) as {
       log: { entries: Array<{ request: { cookies?: unknown[] } }> };
