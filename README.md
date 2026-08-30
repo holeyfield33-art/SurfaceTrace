@@ -19,12 +19,19 @@ npm run typecheck
 npm run build
 ```
 
+- `npm install` installs the root and workspace dependencies recorded by the repository. Success means npm exits without an installation error.
+- `npm test` runs the core, server, and web test suites. Use it to confirm behavior before starting an investigation.
+- `npm run typecheck` asks TypeScript to validate all workspaces without changing source files.
+- `npm run build` compiles the server/core packages and creates the web production bundle. A completed Vite build is the final success signal.
+
 Start the API and web UI in separate terminals:
 
 ```bash
 npm run dev
 npm run dev:web
 ```
+
+`npm run dev` starts Fastify on port `8787`; keep that terminal open. In a second terminal, `npm run dev:web` starts Vite on port `5173` and proxies browser API calls to Fastify. Stop either process with `Ctrl+C` in its terminal.
 
 Open `http://localhost:5173`. API health is available at `http://127.0.0.1:8787/health`.
 

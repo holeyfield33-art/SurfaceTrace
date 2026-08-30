@@ -2739,19 +2739,23 @@ function Classroom({
           </div>
         ) : (
           <p className="coming">
-            This lesson is mapped; full prose is planned for a later content
-            pass.
+            SYLLABUS OUTLINE ONLY. This topic is mapped, but it is not a
+            complete lesson in this version. Use the Course and Run Manual for
+            the complete beginner path; do not mark this outline as practiced
+            until you learn it from a trusted source.
           </p>
         )}
-        <div className="skill-actions">
-          <button onClick={() => onSkill(selected.id, "Comfortable")}>
-            I UNDERSTAND THIS
-          </button>
-          <button onClick={() => onSkill(selected.id, "Learning")}>
-            I NEED MORE PRACTICE
-          </button>
-          <span>{skills[selected.id] ?? "Not Started"}</span>
-        </div>
+        {selected.content && (
+          <div className="skill-actions">
+            <button onClick={() => onSkill(selected.id, "Comfortable")}>
+              I UNDERSTAND THIS
+            </button>
+            <button onClick={() => onSkill(selected.id, "Learning")}>
+              I NEED MORE PRACTICE
+            </button>
+            <span>{skills[selected.id] ?? "Not Started"}</span>
+          </div>
+        )}
       </main>
     );
   return (
@@ -2760,8 +2764,10 @@ function Classroom({
         <span className="eyebrow">CLASSROOM / LOCAL PROGRESS</span>
         <h1>Learn what the traffic is telling you.</h1>
         <p>
-          Short lessons bridge code, HTTP, application behavior, and security
-          reasoning.
+          Eight complete lessons bridge code, HTTP, application behavior, and
+          security reasoning. The remaining catalog entries are syllabus
+          outlines, not finished lessons; use the Course and Run Manual for the
+          complete beginner path.
         </p>
         {recommendation && (
           <button
