@@ -4,6 +4,7 @@ import {
   REDACTED,
   assertOneVariable,
   bodyShape,
+  buildGraph,
   compareObservations,
   generateHypotheses,
   importHar,
@@ -14,7 +15,15 @@ import {
   redactBody,
   toPathTemplate,
 } from "../src/index.js";
-import type { Endpoint, InputDescriptor, Observation } from "../src/types.js";
+import type {
+  Asset,
+  Endpoint,
+  Experiment,
+  IdentityContext,
+  InputDescriptor,
+  Observation,
+  TrustBoundary,
+} from "../src/types.js";
 import type { HarFile } from "../src/har/types.js";
 
 describe("redaction", () => {
@@ -554,6 +563,99 @@ describe("unified request inputs", () => {
         .map((item) => item.name),
     ).toEqual(names);
     expect(JSON.stringify(result)).not.toMatch(/form-secret|file-secret/);
+  });
+});
+
+describe("threat map relationships", () => {
+  test("generates observed, manual, and inferred nodes with investigation edges", () => {
+    const imported = importHar(fixture("https://example.test/orders/100"));
+    const observation = imported.observations[0]!;
+    observation.identityId = "account-a";
+    const identities: IdentityContext[] = [
+      {
+        id: "account-a",
+        label: "Account A",
+        role: "user",
+        notes: null,
+        associatedObservationIds: [observation.id],
+      },
+    ];
+    const asset: Asset = {
+      id: "asset-orders",
+      label: "Order Record",
+      category: "account_data",
+      notes: null,
+      linkedEndpointIds: [observation.endpointId],
+      linkedObservationIds: [observation.id],
+      createdAt: "now",
+      provenance: "manual",
+    };
+    const boundary: TrustBoundary = {
+      id: "boundary-api",
+      label: "Browser to API",
+      type: "browser_api",
+      notes: null,
+      sourceRef: "account-a",
+      destinationRef: observation.endpointId,
+      createdAt: "now",
+      provenance: "manual",
+    };
+    const hypothesis = generateHypotheses(
+      imported.endpoints,
+      imported.inputs,
+    )[0]!;
+    const diff = compareObservations("experiment", observation, observation);
+    const experiment: Experiment = {
+      id: "experiment",
+      endpointId: observation.endpointId,
+      baselineObservationId: observation.id,
+      resultObservationId: observation.id,
+      hypothesisId: hypothesis.id,
+      mutation: { identity: { fromRole: "user", toRole: "admin" } },
+      mutationDescription: "identity: user -> admin",
+      comparisonClassification: "controlled",
+      requestDifferences: [],
+      diff,
+      baselineIdentityId: "account-a",
+      resultIdentityId: "account-a",
+      status: "investigating",
+      conclusion: null,
+      notes: null,
+      evidenceIds: [],
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    const graph = buildGraph({
+      ...imported,
+      identities,
+      assets: [asset],
+      trustBoundaries: [boundary],
+      hypotheses: [hypothesis],
+      experiments: [experiment],
+    });
+    expect(
+      graph.nodes.map(({ kind, provenance }) => `${kind}:${provenance}`),
+    ).toEqual(
+      expect.arrayContaining([
+        "endpoint:observed",
+        "input:observed",
+        "identity:manual",
+        "asset:manual",
+        "trust_boundary:manual",
+        "hypothesis:inferred",
+        "experiment:manual",
+      ]),
+    );
+    expect(
+      graph.edges.map(({ source, target }) => `${source}->${target}`),
+    ).toEqual(
+      expect.arrayContaining([
+        `${identities[0]!.id}->${observation.endpointId}`,
+        `${observation.endpointId}->${asset.id}`,
+        `${hypothesis.id}->${observation.endpointId}`,
+        `${experiment.id}->${hypothesis.id}`,
+      ]),
+    );
   });
 });
 

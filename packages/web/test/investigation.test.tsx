@@ -72,6 +72,13 @@ const hypothesis = {
   signal: "object-id-in-path-or-input",
   priority: 7,
   status: "open",
+  observationIds: [],
+  experimentIds: [],
+  assetIds: [],
+  trustBoundaryIds: [],
+  evidenceIds: [],
+  notes: null,
+  provenance: "inferred",
 };
 const inventory = {
   endpoints: [endpoint],
@@ -116,6 +123,39 @@ const inventory = {
     },
   ],
   experiments: [] as Array<Record<string, any>>,
+  assets: [] as Array<Record<string, any>>,
+  trustBoundaries: [] as Array<Record<string, any>>,
+  graph: {
+    nodes: [
+      {
+        id: endpoint.id,
+        kind: "endpoint",
+        label: "GET /api/projects/{id}",
+        provenance: "observed",
+      },
+      { id: input.id, kind: "input", label: "path.id", provenance: "observed" },
+      {
+        id: hypothesis.id,
+        kind: "hypothesis",
+        label: hypothesis.question,
+        provenance: "inferred",
+      },
+    ],
+    edges: [
+      {
+        id: "endpoint-input",
+        source: endpoint.id,
+        target: input.id,
+        label: "accepts",
+      },
+      {
+        id: "hypothesis-endpoint",
+        source: hypothesis.id,
+        target: endpoint.id,
+        label: "questions",
+      },
+    ],
+  },
   evidence: [
     {
       id: "import",
@@ -477,6 +517,218 @@ describe("investigation loop", () => {
     await waitFor(() =>
       expect(current.experiments[0]!.notes).toBe("Tester-authored follow-up"),
     );
+  });
+
+  test("manages threat annotations, hypothesis lifecycle, provenance, and graph links", async () => {
+    const user = userEvent.setup();
+    const current = structuredClone(inventory);
+    current.observations[0]!.identityId = "account-a";
+    function rebuildGraph(): void {
+      current.graph.nodes = [
+        {
+          id: endpoint.id,
+          kind: "endpoint",
+          label: "GET /api/projects/{id}",
+          provenance: "observed",
+        },
+        {
+          id: input.id,
+          kind: "input",
+          label: "path.id",
+          provenance: "observed",
+        },
+        {
+          id: "account-a",
+          kind: "identity",
+          label: "Account A",
+          provenance: "manual",
+        },
+        {
+          id: hypothesis.id,
+          kind: "hypothesis",
+          label: hypothesis.question,
+          provenance: "inferred",
+        },
+        ...current.assets.map((item) => ({
+          id: item.id,
+          kind: "asset",
+          label: item.label,
+          provenance: "manual",
+        })),
+        ...current.trustBoundaries.map((item) => ({
+          id: item.id,
+          kind: "trust_boundary",
+          label: item.label,
+          provenance: "manual",
+        })),
+      ];
+      current.graph.edges = [
+        {
+          id: "identity-endpoint",
+          source: "account-a",
+          target: endpoint.id,
+          label: "observed as",
+        },
+        {
+          id: "endpoint-input",
+          source: endpoint.id,
+          target: input.id,
+          label: "accepts",
+        },
+        {
+          id: "hypothesis-endpoint",
+          source: hypothesis.id,
+          target: endpoint.id,
+          label: "questions",
+        },
+        ...current.assets.map((item) => ({
+          id: `asset-${item.id}`,
+          source: endpoint.id,
+          target: item.id,
+          label: "handles",
+        })),
+        ...current.trustBoundaries.map((item) => ({
+          id: `boundary-${item.id}`,
+          source: item.sourceRef,
+          target: item.id,
+          label: "crosses",
+        })),
+      ];
+    }
+    rebuildGraph();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(request);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/import/har"))
+          return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/inventory")) return jsonResponse(current);
+        if (url.endsWith("/api/assets") && method === "POST") {
+          const body = JSON.parse(String(init?.body));
+          const asset = {
+            id: "asset-1",
+            ...body,
+            linkedObservationIds: [],
+            provenance: "manual",
+          };
+          current.assets.push(asset);
+          rebuildGraph();
+          return jsonResponse(asset, 201);
+        }
+        if (url.endsWith("/api/assets/asset-1") && method === "PATCH") {
+          Object.assign(current.assets[0]!, JSON.parse(String(init?.body)));
+          rebuildGraph();
+          return jsonResponse(current.assets[0]);
+        }
+        if (url.endsWith("/api/assets/asset-1") && method === "DELETE") {
+          current.assets.splice(0, 1);
+          rebuildGraph();
+          return jsonResponse({});
+        }
+        if (url.endsWith("/api/trust-boundaries") && method === "POST") {
+          const body = JSON.parse(String(init?.body));
+          const boundary = { id: "boundary-1", ...body, provenance: "manual" };
+          current.trustBoundaries.push(boundary);
+          rebuildGraph();
+          return jsonResponse(boundary, 201);
+        }
+        if (
+          url.endsWith("/api/trust-boundaries/boundary-1") &&
+          method === "PATCH"
+        ) {
+          Object.assign(
+            current.trustBoundaries[0]!,
+            JSON.parse(String(init?.body)),
+          );
+          rebuildGraph();
+          return jsonResponse(current.trustBoundaries[0]);
+        }
+        if (
+          url.endsWith("/api/trust-boundaries/boundary-1") &&
+          method === "DELETE"
+        ) {
+          current.trustBoundaries.splice(0, 1);
+          rebuildGraph();
+          return jsonResponse({});
+        }
+        if (
+          url.endsWith(`/api/hypotheses/${hypothesis.id}`) &&
+          method === "PATCH"
+        ) {
+          Object.assign(current.hypotheses[0]!, JSON.parse(String(init?.body)));
+          return jsonResponse({
+            hypothesis: current.hypotheses[0],
+            evidence: { id: "hyp-evidence" },
+          });
+        }
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    const file = new File(["{}"], "sample.har", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+    await user.upload(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      file,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "INVESTIGATION" }),
+    );
+    expect(screen.getAllByText("OBSERVED").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("MANUAL").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("INFERRED").length).toBeGreaterThan(0);
+    await user.type(screen.getByLabelText("Asset label"), "Project Owner Data");
+    await user.selectOptions(screen.getByLabelText("Asset category"), "pii");
+    await user.click(screen.getByRole("button", { name: "ADD ASSET" }));
+    expect(
+      (await screen.findAllByText("Project Owner Data")).length,
+    ).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "EDIT" }));
+    await user.clear(screen.getByLabelText("Asset label"));
+    await user.type(
+      screen.getByLabelText("Asset label"),
+      "Project Account Data",
+    );
+    await user.click(screen.getByRole("button", { name: "SAVE ASSET" }));
+    expect(
+      (await screen.findAllByText("Project Account Data")).length,
+    ).toBeGreaterThan(0);
+    await user.type(
+      screen.getByLabelText("Boundary label"),
+      "Browser to Project API",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Boundary type"),
+      "browser_api",
+    );
+    await user.click(screen.getByRole("button", { name: "ADD BOUNDARY" }));
+    expect(
+      (await screen.findAllByText("Browser to Project API")).length,
+    ).toBeGreaterThan(0);
+    await user.selectOptions(
+      screen.getByLabelText(`Status for ${hypothesis.question}`),
+      "supported",
+    );
+    expect(
+      await screen.findByText(
+        /Supported means evidence supports continuing this hypothesis/,
+      ),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "LINK CURRENT CONTEXT" }),
+    );
+    await waitFor(() =>
+      expect(current.hypotheses[0]!.assetIds).toEqual(["asset-1"]),
+    );
+    expect(screen.getAllByText(/Account A/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Project Account Data/).length).toBeGreaterThan(
+      0,
+    );
+    await user.click(screen.getAllByRole("button", { name: "REMOVE" })[0]!);
+    await waitFor(() => expect(current.assets).toEqual([]));
+    await user.click(screen.getByRole("button", { name: "REMOVE" }));
+    await waitFor(() => expect(current.trustBoundaries).toEqual([]));
   });
 });
 

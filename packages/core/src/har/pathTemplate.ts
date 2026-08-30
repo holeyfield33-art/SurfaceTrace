@@ -24,7 +24,7 @@ export function toPathTemplate(pathname: string): string {
 
 export function extractPathParams(
   pathname: string,
-  template: string
+  template: string,
 ): Record<string, string> {
   const pathParts = pathname.split("/").filter((p) => p.length > 0);
   const templateParts = template.split("/").filter((p) => p.length > 0);

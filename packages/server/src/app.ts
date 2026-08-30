@@ -14,13 +14,18 @@ import {
   redactBody,
 } from "@surfacetrace/core";
 import type {
+  Asset,
+  AssetCategory,
   Experiment,
   ExperimentMutation,
   ExperimentStatus,
+  HypothesisStatus,
   IdentityContext,
   InputDescriptor,
   Observation,
   TesterConclusion,
+  TrustBoundary,
+  TrustBoundaryType,
 } from "@surfacetrace/core";
 
 const EXPERIMENT_STATUSES = new Set<ExperimentStatus>([
@@ -39,6 +44,32 @@ const TESTER_CONCLUSIONS = new Set<TesterConclusion>([
   "needs_more_testing",
   "potential_security_issue",
   "not_reproducible",
+]);
+const ASSET_CATEGORIES = new Set<AssetCategory>([
+  "pii",
+  "account_data",
+  "payment_data",
+  "credentials_secrets",
+  "documents_files",
+  "administrative_function",
+  "internal_service_data",
+  "custom",
+]);
+const BOUNDARY_TYPES = new Set<TrustBoundaryType>([
+  "browser_api",
+  "public_authenticated",
+  "user_privileged",
+  "application_third_party",
+  "application_internal_service",
+  "custom",
+]);
+const HYPOTHESIS_STATUSES = new Set<HypothesisStatus>([
+  "open",
+  "investigating",
+  "supported",
+  "not_supported",
+  "needs_more_evidence",
+  "closed",
 ]);
 
 export interface AppOptions {
@@ -63,6 +94,8 @@ export function buildApp(options: AppOptions = {}) {
   });
   const ledger = new EvidenceLedger();
   const experiments: Experiment[] = [];
+  const assets: Asset[] = [];
+  const trustBoundaries: TrustBoundary[] = [];
   let lastImport: ReturnType<typeof importHar> | null = null;
   let lastGraph: ReturnType<typeof buildGraph> | null = null;
   let lastHypotheses: ReturnType<typeof generateHypotheses> | null = null;
@@ -103,6 +136,18 @@ export function buildApp(options: AppOptions = {}) {
       associatedObservationIds: [],
     },
   ];
+
+  function refreshGraph(): void {
+    if (!lastImport || !lastHypotheses) return;
+    lastGraph = buildGraph({
+      ...lastImport,
+      identities,
+      assets,
+      trustBoundaries,
+      hypotheses: lastHypotheses,
+      experiments,
+    });
+  }
 
   void app.register(cors, {
     origin(origin, callback) {
@@ -162,11 +207,10 @@ export function buildApp(options: AppOptions = {}) {
         detail: error instanceof Error ? error.message : String(error),
       });
     }
-    const graph = buildGraph(result);
     const hypotheses = generateHypotheses(result.endpoints, result.inputs);
     lastImport = result;
-    lastGraph = graph;
     lastHypotheses = hypotheses;
+    refreshGraph();
     ledger.append("observation", {
       count: result.observations.length,
       endpoints: result.endpoints.length,
@@ -178,7 +222,7 @@ export function buildApp(options: AppOptions = {}) {
       endpoints: result.endpoints.length,
       inputs: result.inputs.length,
       hypotheses: hypotheses.length,
-      graph: { nodes: graph.nodes.length, edges: graph.edges.length },
+      graph: { nodes: lastGraph!.nodes.length, edges: lastGraph!.edges.length },
       evidenceTip: ledger.tipHash(),
     };
   });
@@ -215,6 +259,8 @@ export function buildApp(options: AppOptions = {}) {
       endpoints: lastImport.endpoints,
       inputs: lastImport.inputs,
       identities,
+      assets,
+      trustBoundaries,
       hypotheses: lastHypotheses,
       experiments,
       graph: lastGraph,
@@ -245,7 +291,241 @@ export function buildApp(options: AppOptions = {}) {
       );
     observation.identityId = identity.id;
     identity.associatedObservationIds.push(observation.id);
+    refreshGraph();
     return { observation, identity };
+  });
+
+  app.post<{
+    Body: {
+      label: string;
+      category: AssetCategory;
+      notes?: string;
+      linkedEndpointIds?: string[];
+      linkedObservationIds?: string[];
+    };
+  }>("/assets", async (request, reply) => {
+    if (!lastImport)
+      return reply
+        .status(409)
+        .send({ error: "Import a HAR before adding assets" });
+    const body = request.body;
+    if (!body?.label?.trim() || !ASSET_CATEGORIES.has(body.category))
+      return reply
+        .status(400)
+        .send({ error: "Valid asset label and category required" });
+    if (
+      !validIds(body.linkedEndpointIds, lastImport.endpoints) ||
+      !validIds(body.linkedObservationIds, lastImport.observations)
+    )
+      return reply.status(400).send({
+        error: "Asset links must reference imported endpoints and observations",
+      });
+    const createdAt = new Date().toISOString();
+    const asset: Asset = {
+      id: hashPayload({
+        kind: "asset",
+        label: body.label.trim(),
+        createdAt,
+      }).slice(0, 20),
+      label: body.label.trim(),
+      category: body.category,
+      notes: redactBody(body.notes, "text/plain"),
+      linkedEndpointIds: unique(body.linkedEndpointIds),
+      linkedObservationIds: unique(body.linkedObservationIds),
+      createdAt,
+      provenance: "manual",
+    };
+    assets.push(asset);
+    refreshGraph();
+    return reply.status(201).send(asset);
+  });
+  app.patch<{
+    Params: { assetId: string };
+    Body: Partial<
+      Pick<
+        Asset,
+        | "label"
+        | "category"
+        | "notes"
+        | "linkedEndpointIds"
+        | "linkedObservationIds"
+      >
+    >;
+  }>("/assets/:assetId", async (request, reply) => {
+    const asset = assets.find((item) => item.id === request.params.assetId);
+    if (!asset || !lastImport)
+      return reply.status(404).send({ error: "Asset not found" });
+    const body = request.body ?? {};
+    if (body.category && !ASSET_CATEGORIES.has(body.category))
+      return reply.status(400).send({ error: "Invalid asset category" });
+    if (
+      !validIds(body.linkedEndpointIds, lastImport.endpoints) ||
+      !validIds(body.linkedObservationIds, lastImport.observations)
+    )
+      return reply.status(400).send({ error: "Invalid asset link" });
+    if (body.label !== undefined) asset.label = body.label.trim();
+    if (body.category !== undefined) asset.category = body.category;
+    if (body.notes !== undefined)
+      asset.notes = redactBody(body.notes, "text/plain");
+    if (body.linkedEndpointIds !== undefined)
+      asset.linkedEndpointIds = unique(body.linkedEndpointIds);
+    if (body.linkedObservationIds !== undefined)
+      asset.linkedObservationIds = unique(body.linkedObservationIds);
+    refreshGraph();
+    return asset;
+  });
+  app.delete<{ Params: { assetId: string } }>(
+    "/assets/:assetId",
+    async (request, reply) => {
+      const index = assets.findIndex(
+        (item) => item.id === request.params.assetId,
+      );
+      if (index < 0)
+        return reply.status(404).send({ error: "Asset not found" });
+      assets.splice(index, 1);
+      for (const hypothesis of lastHypotheses ?? [])
+        hypothesis.assetIds = hypothesis.assetIds.filter(
+          (id) => id !== request.params.assetId,
+        );
+      refreshGraph();
+      return reply.status(204).send();
+    },
+  );
+
+  app.post<{
+    Body: {
+      label: string;
+      type: TrustBoundaryType;
+      notes?: string;
+      sourceRef: string;
+      destinationRef: string;
+    };
+  }>("/trust-boundaries", async (request, reply) => {
+    const body = request.body;
+    if (
+      !body?.label?.trim() ||
+      !BOUNDARY_TYPES.has(body.type) ||
+      !body.sourceRef?.trim() ||
+      !body.destinationRef?.trim()
+    )
+      return reply.status(400).send({
+        error: "Valid boundary label, type, source, and destination required",
+      });
+    const createdAt = new Date().toISOString();
+    const boundary: TrustBoundary = {
+      id: hashPayload({
+        kind: "boundary",
+        label: body.label.trim(),
+        createdAt,
+      }).slice(0, 20),
+      label: body.label.trim(),
+      type: body.type,
+      notes: redactBody(body.notes, "text/plain"),
+      sourceRef: body.sourceRef.trim(),
+      destinationRef: body.destinationRef.trim(),
+      createdAt,
+      provenance: "manual",
+    };
+    trustBoundaries.push(boundary);
+    refreshGraph();
+    return reply.status(201).send(boundary);
+  });
+  app.patch<{
+    Params: { boundaryId: string };
+    Body: Partial<
+      Pick<
+        TrustBoundary,
+        "label" | "type" | "notes" | "sourceRef" | "destinationRef"
+      >
+    >;
+  }>("/trust-boundaries/:boundaryId", async (request, reply) => {
+    const boundary = trustBoundaries.find(
+      (item) => item.id === request.params.boundaryId,
+    );
+    if (!boundary)
+      return reply.status(404).send({ error: "Trust boundary not found" });
+    const body = request.body ?? {};
+    if (body.type && !BOUNDARY_TYPES.has(body.type))
+      return reply.status(400).send({ error: "Invalid trust boundary type" });
+    if (body.label !== undefined) boundary.label = body.label.trim();
+    if (body.type !== undefined) boundary.type = body.type;
+    if (body.notes !== undefined)
+      boundary.notes = redactBody(body.notes, "text/plain");
+    if (body.sourceRef !== undefined)
+      boundary.sourceRef = body.sourceRef.trim();
+    if (body.destinationRef !== undefined)
+      boundary.destinationRef = body.destinationRef.trim();
+    refreshGraph();
+    return boundary;
+  });
+  app.delete<{ Params: { boundaryId: string } }>(
+    "/trust-boundaries/:boundaryId",
+    async (request, reply) => {
+      const index = trustBoundaries.findIndex(
+        (item) => item.id === request.params.boundaryId,
+      );
+      if (index < 0)
+        return reply.status(404).send({ error: "Trust boundary not found" });
+      trustBoundaries.splice(index, 1);
+      for (const hypothesis of lastHypotheses ?? [])
+        hypothesis.trustBoundaryIds = hypothesis.trustBoundaryIds.filter(
+          (id) => id !== request.params.boundaryId,
+        );
+      refreshGraph();
+      return reply.status(204).send();
+    },
+  );
+
+  app.patch<{
+    Params: { hypothesisId: string };
+    Body: {
+      status?: HypothesisStatus;
+      observationIds?: string[];
+      experimentIds?: string[];
+      assetIds?: string[];
+      trustBoundaryIds?: string[];
+      evidenceIds?: string[];
+      notes?: string;
+    };
+  }>("/hypotheses/:hypothesisId", async (request, reply) => {
+    const hypothesis = lastHypotheses?.find(
+      (item) => item.id === request.params.hypothesisId,
+    );
+    if (!hypothesis || !lastImport)
+      return reply.status(404).send({ error: "Hypothesis not found" });
+    const body = request.body ?? {};
+    if (body.status && !HYPOTHESIS_STATUSES.has(body.status))
+      return reply.status(400).send({ error: "Invalid hypothesis status" });
+    if (
+      !validIds(body.observationIds, lastImport.observations) ||
+      !validIds(body.experimentIds, experiments) ||
+      !validIds(body.assetIds, assets) ||
+      !validIds(body.trustBoundaryIds, trustBoundaries) ||
+      !validIds(body.evidenceIds, ledger.all())
+    )
+      return reply.status(400).send({ error: "Invalid hypothesis reference" });
+    if (body.status !== undefined) hypothesis.status = body.status;
+    if (body.observationIds !== undefined)
+      hypothesis.observationIds = unique(body.observationIds);
+    if (body.experimentIds !== undefined)
+      hypothesis.experimentIds = unique(body.experimentIds);
+    if (body.assetIds !== undefined)
+      hypothesis.assetIds = unique(body.assetIds);
+    if (body.trustBoundaryIds !== undefined)
+      hypothesis.trustBoundaryIds = unique(body.trustBoundaryIds);
+    if (body.evidenceIds !== undefined)
+      hypothesis.evidenceIds = unique(body.evidenceIds);
+    if (body.notes !== undefined)
+      hypothesis.notes = redactBody(body.notes, "text/plain");
+    const evidence = ledger.append("note", {
+      event: "hypothesis_updated",
+      hypothesisId: hypothesis.id,
+      status: hypothesis.status,
+    });
+    if (!hypothesis.evidenceIds.includes(evidence.id))
+      hypothesis.evidenceIds.push(evidence.id);
+    refreshGraph();
+    return { hypothesis, evidence, ledgerValid: ledger.verify() };
   });
 
   app.get<{
@@ -468,6 +748,7 @@ export function buildApp(options: AppOptions = {}) {
     const diffEvidence = ledger.append("diff", diff);
     experiment.evidenceIds.push(experimentEvidence.id, diffEvidence.id);
     experiments.push(experiment);
+    refreshGraph();
     return reply.status(201).send({
       experiment,
       diff,
@@ -527,6 +808,19 @@ function lifecycleEvent(changes: Record<string, unknown>): string {
   if (changes.status) return "status_changed";
   if (Object.hasOwn(changes, "conclusion")) return "conclusion_changed";
   return "notes_updated";
+}
+
+function unique(values: string[] | undefined): string[] {
+  return [...new Set(values ?? [])].sort();
+}
+function validIds(
+  values: string[] | undefined,
+  records: readonly { id: string }[],
+): boolean {
+  return (
+    values === undefined ||
+    values.every((id) => records.some((item) => item.id === id))
+  );
 }
 
 function compareSafeRequests(

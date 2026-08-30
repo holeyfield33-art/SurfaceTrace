@@ -2,7 +2,11 @@ export * from "./types.js";
 
 export { parseHarJson, importHar } from "./har/importHar.js";
 export type { ImportResult } from "./har/importHar.js";
-export { toPathTemplate, extractPathParams, segmentToPlaceholder } from "./har/pathTemplate.js";
+export {
+  toPathTemplate,
+  extractPathParams,
+  segmentToPlaceholder,
+} from "./har/pathTemplate.js";
 export {
   redactHeaders,
   redactQueryParams,
@@ -19,7 +23,10 @@ export type { GraphBuildInput, GraphBuildResult } from "./graph/buildGraph.js";
 
 export { generateHypotheses } from "./threat/hypotheses.js";
 
-export { assertOneVariable, describeMutation } from "./experiment/oneVariable.js";
+export {
+  assertOneVariable,
+  describeMutation,
+} from "./experiment/oneVariable.js";
 export type { MutationKind } from "./experiment/oneVariable.js";
 
 export { compareObservations } from "./diff/compare.js";

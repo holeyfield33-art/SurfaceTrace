@@ -34,6 +34,35 @@ interface Hypothesis {
   signal: string;
   priority: number;
   status: string;
+  observationIds?: string[];
+  experimentIds?: string[];
+  assetIds?: string[];
+  trustBoundaryIds?: string[];
+  evidenceIds?: string[];
+  notes?: string | null;
+  provenance?: "inferred";
+}
+interface AssetAnnotation {
+  id: string;
+  label: string;
+  category: string;
+  notes: string | null;
+  linkedEndpointIds: string[];
+  linkedObservationIds: string[];
+  provenance: "manual";
+}
+interface BoundaryAnnotation {
+  id: string;
+  label: string;
+  type: string;
+  notes: string | null;
+  sourceRef: string;
+  destinationRef: string;
+  provenance: "manual";
+}
+interface GraphView {
+  nodes: Array<{ id: string; kind: string; label: string; provenance: string }>;
+  edges: Array<{ id: string; source: string; target: string; label?: string }>;
 }
 interface Observation {
   id: string;
@@ -126,6 +155,9 @@ interface Inventory {
   evidence: Evidence[];
   identities: Identity[];
   experiments?: ExperimentRecord[];
+  assets?: AssetAnnotation[];
+  trustBoundaries?: BoundaryAnnotation[];
+  graph?: GraphView;
 }
 const emptyInventory: Inventory = {
   observations: [],
@@ -135,6 +167,8 @@ const emptyInventory: Inventory = {
   evidence: [],
   identities: [],
   experiments: [],
+  assets: [],
+  trustBoundaries: [],
 };
 
 export default function App() {
@@ -457,6 +491,7 @@ function Investigation({
   const [inspectorTab, setInspectorTab] = useState<
     "request" | "response" | "parsed" | "diff"
   >("request");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState("");
   const selectedInput = inputs.find((item) => item.id === inputId);
   const inspected =
     observations.find((item) => item.id === inspectorObservationId) ??
@@ -562,6 +597,7 @@ function Investigation({
               <b>{item.method}</b>
               <span>{item.pathTemplate}</span>
               <small>{item.observationCount} observations</small>
+              <small>OBSERVED</small>
             </button>
           ))}
           {current &&
@@ -571,6 +607,29 @@ function Investigation({
                 {item.name}
               </div>
             ))}
+          {(inventory.graph?.nodes ?? [])
+            .filter((node) => !["endpoint", "input"].includes(node.kind))
+            .map((node) => (
+              <button
+                key={node.id}
+                aria-label={`${node.kind.replaceAll("_", " ")} graph node`}
+                className={`graph-annotation ${node.kind} ${selectedGraphNodeId === node.id ? "selected" : ""}`}
+                onClick={() => setSelectedGraphNodeId(node.id)}
+              >
+                <span>{node.kind.replaceAll("_", " ")}</span>
+                <strong>{node.label}</strong>
+                <small>{node.provenance.toUpperCase()}</small>
+              </button>
+            ))}
+        </div>
+        <div className="graph-edges">
+          {(inventory.graph?.edges ?? []).map((edge) => (
+            <span key={edge.id}>
+              {graphNodeLabel(edge.source, inventory.graph)} <b>-&gt;</b>{" "}
+              {graphNodeLabel(edge.target, inventory.graph)}{" "}
+              <small>{edge.label}</small>
+            </span>
+          ))}
         </div>
       </section>
       <section className="investigation-detail loop-detail">
@@ -605,6 +664,25 @@ function Investigation({
                   throw new Error("Identity assignment could not be saved");
                 await onSaved();
               }}
+            />
+            <ThreatAnnotations
+              current={current}
+              identities={inventory.identities}
+              assets={inventory.assets ?? []}
+              boundaries={inventory.trustBoundaries ?? []}
+              onSaved={onSaved}
+            />
+            <ThreatCards
+              hypotheses={hypotheses}
+              endpoint={current}
+              inputs={inputs}
+              observations={observations}
+              identities={inventory.identities}
+              assets={inventory.assets ?? []}
+              boundaries={inventory.trustBoundaries ?? []}
+              experiments={inventory.experiments ?? []}
+              evidence={inventory.evidence}
+              onSaved={onSaved}
             />
             <IdentityComparison
               endpoint={current}
@@ -890,6 +968,453 @@ const AUTHORIZATION_QUESTIONS = [
   "Does the server enforce both authentication and object ownership?",
   "Does the same resource behave differently for Anonymous vs authenticated identities?",
 ];
+
+const ASSET_CATEGORIES = [
+  ["pii", "PII"],
+  ["account_data", "Account Data"],
+  ["payment_data", "Payment Data"],
+  ["credentials_secrets", "Credentials/Secrets"],
+  ["documents_files", "Documents/Files"],
+  ["administrative_function", "Administrative Function"],
+  ["internal_service_data", "Internal Service/Data"],
+  ["custom", "Custom"],
+] as const;
+const BOUNDARY_TYPES = [
+  ["browser_api", "Browser <-> API"],
+  ["public_authenticated", "Public <-> Authenticated"],
+  ["user_privileged", "User <-> Privileged/Admin"],
+  ["application_third_party", "Application <-> Third Party"],
+  ["application_internal_service", "Application <-> Internal Service"],
+  ["custom", "Custom"],
+] as const;
+const HYPOTHESIS_STATUSES = [
+  "open",
+  "investigating",
+  "supported",
+  "not_supported",
+  "needs_more_evidence",
+  "closed",
+];
+
+function ThreatAnnotations({
+  current,
+  identities,
+  assets,
+  boundaries,
+  onSaved,
+}: {
+  current: Endpoint;
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [assetLabel, setAssetLabel] = useState("");
+  const [assetCategory, setAssetCategory] = useState("pii");
+  const [assetNotes, setAssetNotes] = useState("");
+  const [editingAssetId, setEditingAssetId] = useState("");
+  const [boundaryLabel, setBoundaryLabel] = useState("");
+  const [boundaryType, setBoundaryType] = useState("browser_api");
+  const [boundaryNotes, setBoundaryNotes] = useState("");
+  const [boundarySource, setBoundarySource] = useState(
+    identities[0]?.id ?? "browser",
+  );
+  const [editingBoundaryId, setEditingBoundaryId] = useState("");
+  async function send(
+    url: string,
+    method: string,
+    body?: unknown,
+  ): Promise<void> {
+    const response = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) throw new Error("Threat annotation update failed");
+    await onSaved();
+  }
+  async function saveAsset(): Promise<void> {
+    await send(
+      editingAssetId ? `/api/assets/${editingAssetId}` : "/api/assets",
+      editingAssetId ? "PATCH" : "POST",
+      {
+        label: assetLabel,
+        category: assetCategory,
+        notes: assetNotes,
+        linkedEndpointIds: [current.id],
+      },
+    );
+    setAssetLabel("");
+    setAssetNotes("");
+    setEditingAssetId("");
+  }
+  async function saveBoundary(): Promise<void> {
+    await send(
+      editingBoundaryId
+        ? `/api/trust-boundaries/${editingBoundaryId}`
+        : "/api/trust-boundaries",
+      editingBoundaryId ? "PATCH" : "POST",
+      {
+        label: boundaryLabel,
+        type: boundaryType,
+        notes: boundaryNotes,
+        sourceRef: boundarySource,
+        destinationRef: current.id,
+      },
+    );
+    setBoundaryLabel("");
+    setBoundaryNotes("");
+    setEditingBoundaryId("");
+  }
+  return (
+    <section className="threat-annotations">
+      <div className="annotation-title">
+        <span className="eyebrow">MANUAL THREAT MAP</span>
+        <h2>Annotate boundaries and assets.</h2>
+        <p>
+          Tester-defined context only. SurfaceTrace does not infer either
+          annotation.
+        </p>
+      </div>
+      <div className="annotation-forms">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveAsset();
+          }}
+        >
+          <h3>{editingAssetId ? "EDIT ASSET" : "ADD SENSITIVE ASSET"}</h3>
+          <label>
+            Asset label
+            <input
+              aria-label="Asset label"
+              required
+              value={assetLabel}
+              onChange={(event) => setAssetLabel(event.target.value)}
+            />
+          </label>
+          <label>
+            Asset category
+            <select
+              aria-label="Asset category"
+              value={assetCategory}
+              onChange={(event) => setAssetCategory(event.target.value)}
+            >
+              {ASSET_CATEGORIES.map(([value, label]) => (
+                <option value={value} key={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Asset notes
+            <textarea
+              aria-label="Asset notes"
+              value={assetNotes}
+              onChange={(event) => setAssetNotes(event.target.value)}
+            />
+          </label>
+          <button type="submit">
+            {editingAssetId ? "SAVE ASSET" : "ADD ASSET"}
+          </button>
+        </form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveBoundary();
+          }}
+        >
+          <h3>{editingBoundaryId ? "EDIT BOUNDARY" : "ADD TRUST BOUNDARY"}</h3>
+          <label>
+            Boundary label
+            <input
+              aria-label="Boundary label"
+              required
+              value={boundaryLabel}
+              onChange={(event) => setBoundaryLabel(event.target.value)}
+            />
+          </label>
+          <label>
+            Boundary type
+            <select
+              aria-label="Boundary type"
+              value={boundaryType}
+              onChange={(event) => setBoundaryType(event.target.value)}
+            >
+              {BOUNDARY_TYPES.map(([value, label]) => (
+                <option value={value} key={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Source reference
+            <select
+              aria-label="Boundary source"
+              value={boundarySource}
+              onChange={(event) => setBoundarySource(event.target.value)}
+            >
+              {identities.map((identity) => (
+                <option value={identity.id} key={identity.id}>
+                  {identity.label}
+                </option>
+              ))}
+              <option value="browser">Browser / custom reference</option>
+            </select>
+          </label>
+          <label>
+            Boundary notes
+            <textarea
+              aria-label="Boundary notes"
+              value={boundaryNotes}
+              onChange={(event) => setBoundaryNotes(event.target.value)}
+            />
+          </label>
+          <button type="submit">
+            {editingBoundaryId ? "SAVE BOUNDARY" : "ADD BOUNDARY"}
+          </button>
+        </form>
+      </div>
+      <div className="annotation-list">
+        {assets.map((asset) => (
+          <article key={asset.id}>
+            <b>ASSET / MANUAL</b>
+            <strong>{asset.label}</strong>
+            <span>{displayValue(asset.category)}</span>
+            <button
+              onClick={() => {
+                setEditingAssetId(asset.id);
+                setAssetLabel(asset.label);
+                setAssetCategory(asset.category);
+                setAssetNotes(asset.notes ?? "");
+              }}
+            >
+              EDIT
+            </button>
+            <button
+              onClick={() => void send(`/api/assets/${asset.id}`, "DELETE")}
+            >
+              REMOVE
+            </button>
+          </article>
+        ))}
+        {boundaries.map((boundary) => (
+          <article key={boundary.id}>
+            <b>BOUNDARY / MANUAL</b>
+            <strong>{boundary.label}</strong>
+            <span>{displayValue(boundary.type)}</span>
+            <button
+              onClick={() => {
+                setEditingBoundaryId(boundary.id);
+                setBoundaryLabel(boundary.label);
+                setBoundaryType(boundary.type);
+                setBoundaryNotes(boundary.notes ?? "");
+                setBoundarySource(boundary.sourceRef);
+              }}
+            >
+              EDIT
+            </button>
+            <button
+              onClick={() =>
+                void send(`/api/trust-boundaries/${boundary.id}`, "DELETE")
+              }
+            >
+              REMOVE
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ThreatCards({
+  hypotheses,
+  endpoint,
+  inputs,
+  observations,
+  identities,
+  assets,
+  boundaries,
+  experiments,
+  evidence,
+  onSaved,
+}: {
+  hypotheses: Hypothesis[];
+  endpoint: Endpoint;
+  inputs: Input[];
+  observations: Observation[];
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  experiments: ExperimentRecord[];
+  evidence: Evidence[];
+  onSaved: () => Promise<unknown>;
+}) {
+  return (
+    <section className="threat-cards">
+      <span className="eyebrow">INFERRED SECURITY QUESTIONS</span>
+      <h2>Threat cards</h2>
+      {hypotheses.map((hypothesis) => (
+        <ThreatCard
+          key={hypothesis.id}
+          hypothesis={hypothesis}
+          endpoint={endpoint}
+          inputs={inputs}
+          observations={observations}
+          identities={identities}
+          assets={assets}
+          boundaries={boundaries}
+          experiments={experiments}
+          evidence={evidence}
+          onSaved={onSaved}
+        />
+      ))}
+    </section>
+  );
+}
+
+function ThreatCard({
+  hypothesis,
+  endpoint,
+  inputs,
+  observations,
+  identities,
+  assets,
+  boundaries,
+  experiments,
+  evidence,
+  onSaved,
+}: {
+  hypothesis: Hypothesis;
+  endpoint: Endpoint;
+  inputs: Input[];
+  observations: Observation[];
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  experiments: ExperimentRecord[];
+  evidence: Evidence[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [notes, setNotes] = useState(hypothesis.notes ?? "");
+  const relatedAssets = assets.filter((item) =>
+    item.linkedEndpointIds.includes(endpoint.id),
+  );
+  const relatedBoundaries = boundaries.filter(
+    (item) =>
+      item.destinationRef === endpoint.id || item.sourceRef === endpoint.id,
+  );
+  const relatedExperiments = experiments.filter(
+    (item) => item.hypothesisId === hypothesis.id,
+  );
+  const identityNames = [
+    ...new Set(
+      observations
+        .map((item) => identityLabel(item.identityId, identities))
+        .filter((label) => label !== "Unassigned"),
+    ),
+  ];
+  async function update(body: Record<string, unknown>): Promise<void> {
+    const response = await fetch(`/api/hypotheses/${hypothesis.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error("Hypothesis update failed");
+    await onSaved();
+  }
+  return (
+    <article className="threat-card">
+      <header>
+        <span>INFERRED</span>
+        <b>PRIORITY {hypothesis.priority}</b>
+        <select
+          aria-label={`Status for ${hypothesis.question}`}
+          value={hypothesis.status}
+          onChange={(event) => void update({ status: event.target.value })}
+        >
+          {HYPOTHESIS_STATUSES.map((status) => (
+            <option value={status} key={status}>
+              {displayValue(status)}
+            </option>
+          ))}
+        </select>
+      </header>
+      {hypothesis.status === "supported" && (
+        <p className="supported-boundary">
+          Supported means evidence supports continuing this hypothesis, not a
+          confirmed vulnerability.
+        </p>
+      )}
+      <h3>QUESTION</h3>
+      <p>{hypothesis.question}</p>
+      <dl>
+        <dt>Signal</dt>
+        <dd>{hypothesis.signal}</dd>
+        <dt>Endpoint</dt>
+        <dd>
+          {endpoint.method} {endpoint.pathTemplate} / OBSERVED
+        </dd>
+        <dt>Identity context</dt>
+        <dd>{identityNames.join(", ") || "No assigned identity"} / MANUAL</dd>
+        <dt>Related inputs</dt>
+        <dd>
+          {inputs.map((item) => `${item.location}.${item.name}`).join(", ") ||
+            "None"}{" "}
+          / OBSERVED
+        </dd>
+        <dt>Related assets</dt>
+        <dd>
+          {relatedAssets.map((item) => item.label).join(", ") || "None"} /
+          MANUAL
+        </dd>
+        <dt>Trust boundaries</dt>
+        <dd>
+          {relatedBoundaries.map((item) => item.label).join(", ") || "None"} /
+          MANUAL
+        </dd>
+        <dt>Linked experiments</dt>
+        <dd>
+          {relatedExperiments
+            .map((item) => item.mutationDescription)
+            .join(", ") || "None"}
+        </dd>
+        <dt>Evidence references</dt>
+        <dd>{(hypothesis.evidenceIds ?? []).join(", ") || "None"}</dd>
+      </dl>
+      <label>
+        Hypothesis notes
+        <textarea
+          aria-label={`Notes for ${hypothesis.question}`}
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+        />
+      </label>
+      <div className="threat-actions">
+        <button onClick={() => void update({ notes })}>
+          SAVE HYPOTHESIS NOTES
+        </button>
+        <button
+          onClick={() =>
+            void update({
+              observationIds: observations.map((item) => item.id),
+              experimentIds: relatedExperiments.map((item) => item.id),
+              assetIds: relatedAssets.map((item) => item.id),
+              trustBoundaryIds: relatedBoundaries.map((item) => item.id),
+              evidenceIds: evidence.map((item) => item.id),
+              notes,
+            })
+          }
+        >
+          LINK CURRENT CONTEXT
+        </button>
+      </div>
+    </article>
+  );
+}
 
 function IdentityComparison({
   endpoint,
@@ -1402,6 +1927,9 @@ function displayDiffValue(value: unknown): string {
     : (JSON.stringify(value) ?? String(value));
 }
 
+function graphNodeLabel(id: string, graph?: GraphView): string {
+  return graph?.nodes.find((node) => node.id === id)?.label ?? id;
+}
 function endpointLabel(endpointId: string, endpoints: Endpoint[]): string {
   const endpoint = endpoints.find((item) => item.id === endpointId);
   return endpoint ? `${endpoint.method} ${endpoint.pathTemplate}` : endpointId;

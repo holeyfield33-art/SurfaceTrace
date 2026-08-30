@@ -28,6 +28,30 @@ export type IdentityRole =
   | "unknown";
 
 export type AssetSensitivity = "low" | "medium" | "high" | "critical";
+export type Provenance = "observed" | "manual" | "inferred";
+export type AssetCategory =
+  | "pii"
+  | "account_data"
+  | "payment_data"
+  | "credentials_secrets"
+  | "documents_files"
+  | "administrative_function"
+  | "internal_service_data"
+  | "custom";
+export type TrustBoundaryType =
+  | "browser_api"
+  | "public_authenticated"
+  | "user_privileged"
+  | "application_third_party"
+  | "application_internal_service"
+  | "custom";
+export type HypothesisStatus =
+  | "open"
+  | "investigating"
+  | "supported"
+  | "not_supported"
+  | "needs_more_evidence"
+  | "closed";
 
 export type ExperimentStatus =
   | "open"
@@ -104,18 +128,24 @@ export interface IdentityContext {
 
 export interface Asset {
   id: string;
-  name: string;
-  sensitivity: AssetSensitivity;
-  fieldHints: string[];
-  relatedEndpointIds: string[];
+  label: string;
+  category: AssetCategory;
+  notes: string | null;
+  linkedEndpointIds: string[];
+  linkedObservationIds: string[];
+  createdAt: string;
+  provenance: "manual";
 }
 
 export interface TrustBoundary {
   id: string;
   label: string;
-  from: string;
-  to: string;
-  riskNotes: string | null;
+  type: TrustBoundaryType;
+  notes: string | null;
+  sourceRef: string;
+  destinationRef: string;
+  createdAt: string;
+  provenance: "manual";
 }
 
 export interface Observation {
@@ -170,7 +200,14 @@ export interface Hypothesis {
   signal: string;
   strideCategory: string | null;
   priority: number;
-  status: "open" | "in_progress" | "resolved" | "wont_fix";
+  status: HypothesisStatus;
+  observationIds: string[];
+  experimentIds: string[];
+  assetIds: string[];
+  trustBoundaryIds: string[];
+  evidenceIds: string[];
+  notes: string | null;
+  provenance: "inferred";
 }
 
 export interface ExperimentMutation {
@@ -248,6 +285,7 @@ export interface GraphNode {
   kind: NodeKind;
   label: string;
   data: Record<string, unknown>;
+  provenance: Provenance;
 }
 
 export interface GraphEdge {

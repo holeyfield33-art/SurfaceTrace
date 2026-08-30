@@ -378,6 +378,174 @@ describe("local API trust boundary", () => {
     await app.close();
   });
 
+  test("persists manual threat annotations and hypothesis evidence links in the runtime graph", async () => {
+    const app = buildApp({ logger: false });
+    await app.inject({
+      method: "POST",
+      url: "/import/har",
+      payload: { har: sample },
+    });
+    let inventory = (
+      await app.inject({ method: "GET", url: "/inventory" })
+    ).json();
+    const endpoint = inventory.endpoints.find(
+      (item: { pathTemplate: string }) =>
+        item.pathTemplate === "/api/projects/{id}",
+    );
+    const observations = inventory.observations.filter(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const hypothesis = inventory.hypotheses.find(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const input = inventory.inputs.find(
+      (item: { endpointId: string; location: string }) =>
+        item.endpointId === endpoint.id && item.location === "path",
+    );
+    await app.inject({
+      method: "PATCH",
+      url: `/observations/${observations[0].id}/identity`,
+      payload: { identityId: "account-a" },
+    });
+    const assetResponse = await app.inject({
+      method: "POST",
+      url: "/assets",
+      payload: {
+        label: "Project Owner Data",
+        category: "pii",
+        notes: "Tester annotation",
+        linkedEndpointIds: [endpoint.id],
+        linkedObservationIds: [observations[0].id],
+      },
+    });
+    expect(assetResponse.statusCode).toBe(201);
+    const asset = assetResponse.json();
+    expect(asset).toMatchObject({ provenance: "manual", category: "pii" });
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/assets/${asset.id}`,
+          payload: { label: "Project Account Data", category: "account_data" },
+        })
+      ).json(),
+    ).toMatchObject({
+      label: "Project Account Data",
+      category: "account_data",
+    });
+    const boundaryResponse = await app.inject({
+      method: "POST",
+      url: "/trust-boundaries",
+      payload: {
+        label: "Browser to Project API",
+        type: "browser_api",
+        sourceRef: "account-a",
+        destinationRef: endpoint.id,
+        notes: "Manual boundary",
+      },
+    });
+    expect(boundaryResponse.statusCode).toBe(201);
+    const boundary = boundaryResponse.json();
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/trust-boundaries/${boundary.id}`,
+          payload: { notes: "Reviewed boundary" },
+        })
+      ).json().notes,
+    ).toBe("Reviewed boundary");
+    const experimentResponse = await app.inject({
+      method: "POST",
+      url: "/experiments",
+      payload: {
+        endpointId: endpoint.id,
+        hypothesisId: hypothesis.id,
+        inputId: input.id,
+        baselineObservationId: observations[0].id,
+        resultObservationId: observations[1].id,
+        mutation: { pathParam: { name: input.name, from: "100", to: "200" } },
+      },
+    });
+    const experiment = experimentResponse.json().experiment;
+    inventory = (await app.inject({ method: "GET", url: "/inventory" })).json();
+    const evidenceId = inventory.evidence[0].id;
+    const linked = await app.inject({
+      method: "PATCH",
+      url: `/hypotheses/${hypothesis.id}`,
+      payload: {
+        status: "supported",
+        observationIds: [observations[0].id],
+        experimentIds: [experiment.id],
+        assetIds: [asset.id],
+        trustBoundaryIds: [boundary.id],
+        evidenceIds: [evidenceId],
+        notes: "Evidence supports continuing review",
+      },
+    });
+    expect(linked.json().hypothesis).toMatchObject({
+      status: "supported",
+      experimentIds: [experiment.id],
+      assetIds: [asset.id],
+      trustBoundaryIds: [boundary.id],
+      provenance: "inferred",
+    });
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/hypotheses/${hypothesis.id}`,
+          payload: { status: "confirmed" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    inventory = (await app.inject({ method: "GET", url: "/inventory" })).json();
+    expect(
+      inventory.graph.nodes.map(
+        (item: { kind: string; provenance: string }) =>
+          `${item.kind}:${item.provenance}`,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "endpoint:observed",
+        "identity:manual",
+        "asset:manual",
+        "trust_boundary:manual",
+        "hypothesis:inferred",
+        "experiment:manual",
+      ]),
+    );
+    expect(
+      inventory.graph.edges.map(
+        (item: { source: string; target: string }) =>
+          `${item.source}->${item.target}`,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        `account-a->${endpoint.id}`,
+        `${endpoint.id}->${asset.id}`,
+        `${hypothesis.id}->${endpoint.id}`,
+        `${experiment.id}->${hypothesis.id}`,
+      ]),
+    );
+    expect(
+      (await app.inject({ method: "DELETE", url: `/assets/${asset.id}` }))
+        .statusCode,
+    ).toBe(204);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/trust-boundaries/${boundary.id}`,
+        })
+      ).statusCode,
+    ).toBe(204);
+    inventory = (await app.inject({ method: "GET", url: "/inventory" })).json();
+    expect(inventory.assets).toEqual([]);
+    expect(inventory.trustBoundaries).toEqual([]);
+    await app.close();
+  });
+
   test("rejects zero and multiple changed variables", async () => {
     const app = buildApp({ logger: false });
     await app.inject({

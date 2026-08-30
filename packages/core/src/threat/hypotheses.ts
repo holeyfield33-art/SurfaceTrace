@@ -25,8 +25,7 @@ const RULES: SignalRule[] = [
     basePriority: 7,
   },
   {
-    match: (ep) =>
-      ["POST", "PUT", "PATCH", "DELETE"].includes(ep.method),
+    match: (ep) => ["POST", "PUT", "PATCH", "DELETE"].includes(ep.method),
     question: (ep) =>
       `Are CSRF / session / origin protections appropriate for state-changing ${ep.method} ${ep.pathTemplate}?`,
     signal: "state-changing-method",
@@ -45,10 +44,7 @@ const RULES: SignalRule[] = [
   },
   {
     match: (_ep, inputs) =>
-      inputs.some(
-        (i) =>
-          /redirect|callback|return|next|url/i.test(i.name)
-      ),
+      inputs.some((i) => /redirect|callback|return|next|url/i.test(i.name)),
     question: (ep) =>
       `Is any user-controlled redirect/callback on ${ep.method} ${ep.pathTemplate} constrained to approved destinations?`,
     signal: "user-controlled-redirect",
@@ -56,8 +52,7 @@ const RULES: SignalRule[] = [
     basePriority: 7,
   },
   {
-    match: (ep) =>
-      /upload|download|file|attachment/i.test(ep.pathTemplate),
+    match: (ep) => /upload|download|file|attachment/i.test(ep.pathTemplate),
     question: (ep) =>
       `Are type, size, storage, and access rules enforced server-side for file handling on ${ep.method} ${ep.pathTemplate}?`,
     signal: "file-handling",
@@ -76,7 +71,7 @@ const RULES: SignalRule[] = [
 
 export function generateHypotheses(
   endpoints: Endpoint[],
-  inputs: InputDescriptor[]
+  inputs: InputDescriptor[],
 ): Hypothesis[] {
   const results: Hypothesis[] = [];
 
@@ -94,6 +89,13 @@ export function generateHypotheses(
         strideCategory: rule.stride,
         priority: rule.basePriority,
         status: "open",
+        observationIds: [],
+        experimentIds: [],
+        assetIds: [],
+        trustBoundaryIds: [],
+        evidenceIds: [],
+        notes: null,
+        provenance: "inferred",
       });
     }
   }
