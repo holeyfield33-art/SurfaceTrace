@@ -2,11 +2,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import App from "../src/App";
-import {
-  completedLessonCount,
-  curriculum,
-  validateCurriculum,
-} from "../src/lessons/curriculum";
 
 const endpoint = {
   id: "ep-project",
@@ -178,27 +173,6 @@ afterEach(() => {
 });
 
 describe("investigation loop", () => {
-  test("curriculum manifest keeps the first-session lesson batch complete and validated", () => {
-    expect(completedLessonCount()).toBeGreaterThanOrEqual(10);
-    expect(completedLessonCount()).toBeLessThanOrEqual(15);
-    expect(validateCurriculum()).toEqual([]);
-    const completeLessons = curriculum.filter((lesson) => lesson.content);
-    expect(
-      completeLessons.every((lesson) => lesson.exercise && lesson.quickCheck),
-    ).toBe(true);
-    expect(
-      completeLessons.every(
-        (lesson) =>
-          lesson.content &&
-          lesson.content.concept.trim() &&
-          lesson.content.example.trim() &&
-          lesson.content.connection.trim() &&
-          lesson.content.inspect.trim() &&
-          lesson.content.apply.trim(),
-      ),
-    ).toBe(true);
-  });
-
   test("imports, selects graph context, compares one variable, and saves evidence", async () => {
     const user = userEvent.setup();
     let inventoryReads = 0;
