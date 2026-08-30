@@ -53,7 +53,7 @@ known baseline
 ```
 
 1. Configure an active project scope. Missing or invalid scope fails closed.
-2. Select a known imported baseline and one mutation: path, query, header, body field, or explicit identity change.
+2. Select a known imported baseline and one observed input mutation in the replay panel. Explicit identity mutation is supported through the API, not the current panel.
 3. Prepare the replay. Preparation performs no network activity and consumes no rate budget.
 4. Review the exact redacted outbound request, changed-only description, scope decision, and rate availability.
 5. Select `SEND THIS REQUEST` to approve one request.
@@ -70,7 +70,7 @@ The preview token is single-use. Canceling, invalid mutations, denied scope, exh
 1. Capture authorized baseline observations for each account.
 2. Assign each observation to the correct explicit identity.
 3. Use passive cross-identity comparison to establish request and response differences.
-4. For active identity replay, explicitly provide Account B runtime credential material and select an Account A baseline with one identity mutation.
+4. For API-driven active identity replay, explicitly register Account B runtime credential material, then prepare an Account A baseline with one identity mutation.
 5. Verify the redacted preview identifies the intended transition before approving one request.
 
 SurfaceTrace does not infer, harvest, persist, or automatically swap credentials. If target identity material is unavailable, replay is denied.

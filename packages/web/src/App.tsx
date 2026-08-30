@@ -465,7 +465,7 @@ function CommandCenter({
             </button>
           </>
         ) : (
-          <Empty text="Import sample.har to establish an investigation focus." />
+          <Empty text="Import fixtures/sample.har to begin the guided investigation, or choose an authorized HAR." />
         )}
       </section>
       <section className="panel queue-panel">
