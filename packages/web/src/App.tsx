@@ -830,6 +830,148 @@ function ScopePanel({
   );
 }
 
+function PaperPreviewWorksheet({
+  observations,
+  inputs,
+}: {
+  observations: Observation[];
+  inputs: Input[];
+}) {
+  const [baselineId, setBaselineId] = useState("");
+  const [inputId, setInputId] = useState("");
+  const [baselineClass, setBaselineClass] = useState("");
+  const [mutationValue, setMutationValue] = useState("");
+  const [expectedPolicy, setExpectedPolicy] = useState("");
+  const [authorizedReason, setAuthorizedReason] = useState("");
+  const [expectedResult, setExpectedResult] = useState("");
+  const [stopCondition, setStopCondition] = useState("");
+  const [constant, setConstant] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const draft = {
+    baselineId,
+    inputId,
+    baselineClass,
+    mutationValue,
+    expectedPolicy,
+    authorizedReason,
+    expectedResult,
+    stopCondition,
+    constant,
+  };
+
+  function saveDraft(): void {
+    localStorage.setItem("surfacetrace:paper-preview", JSON.stringify(draft));
+    setMessage("Paper preview saved locally. No request was sent.");
+  }
+
+  return (
+    <section className="panel paper-preview-panel">
+      <PanelLabel number="07" label="PAPER PREVIEW WORKSHEET" />
+      <p>
+        Document the baseline, one changed value, and the reasoning on paper
+        first. This worksheet never sends a request.
+      </p>
+      <div className="structured-grid">
+        <label>
+          Selected imported baseline
+          <select
+            aria-label="Paper baseline"
+            value={baselineId}
+            onChange={(event) => setBaselineId(event.target.value)}
+          >
+            <option value="">Select a baseline</option>
+            {observations.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.method} {item.url}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          One selected input
+          <select
+            aria-label="Paper input"
+            value={inputId}
+            onChange={(event) => setInputId(event.target.value)}
+          >
+            <option value="">Select an input</option>
+            {inputs.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.location}: {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Baseline value class
+          <input
+            aria-label="Baseline class"
+            value={baselineClass}
+            onChange={(event) => setBaselineClass(event.target.value)}
+            placeholder="e.g. object identifier"
+          />
+        </label>
+        <label>
+          Mutation value
+          <input
+            aria-label="Mutation value"
+            value={mutationValue}
+            onChange={(event) => setMutationValue(event.target.value)}
+          />
+        </label>
+        <label>
+          Expected policy
+          <textarea
+            aria-label="Expected policy"
+            value={expectedPolicy}
+            onChange={(event) => setExpectedPolicy(event.target.value)}
+          />
+        </label>
+        <label>
+          Why is this authorized?
+          <textarea
+            aria-label="Authorized reason"
+            value={authorizedReason}
+            onChange={(event) => setAuthorizedReason(event.target.value)}
+          />
+        </label>
+        <label>
+          Expected result
+          <textarea
+            aria-label="Expected result"
+            value={expectedResult}
+            onChange={(event) => setExpectedResult(event.target.value)}
+          />
+        </label>
+        <label>
+          Stop condition
+          <textarea
+            aria-label="Stop condition"
+            value={stopCondition}
+            onChange={(event) => setStopCondition(event.target.value)}
+          />
+        </label>
+        <label>
+          What must remain constant?
+          <textarea
+            aria-label="Must remain constant"
+            value={constant}
+            onChange={(event) => setConstant(event.target.value)}
+          />
+        </label>
+      </div>
+      <button className="action" onClick={saveDraft}>
+        SAVE PAPER WORKSHEET
+      </button>
+      {message && <p>{message}</p>}
+      <p className="paper-preview-note">
+        Request sent: NO. This worksheet only records a local draft.
+      </p>
+    </section>
+  );
+}
+
 function Investigation({
   inventory,
   current,
@@ -1224,6 +1366,7 @@ function Investigation({
                 )}
               </ExperimentStep>
             </div>
+            <PaperPreviewWorksheet observations={observations} inputs={inputs} />
             {recommendations[0] && (
               <button
                 className="lesson-link"

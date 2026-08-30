@@ -1010,6 +1010,76 @@ describe("investigation loop", () => {
     );
     expect(await screen.findByText("RESPONSE 200")).toBeTruthy();
   });
+
+  test("keeps the paper preview worksheet local and non-executing", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+        calls.push(String(request));
+        const url = String(request);
+        if (url.endsWith("/api/scope")) return jsonResponse({ scope: null });
+        if (url.endsWith("/api/import/har"))
+          return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/inventory")) return jsonResponse(inventory);
+        if (url.endsWith("/api/scope/preview"))
+          return jsonResponse({
+            requestSent: false,
+            decision: {
+              allowed: true,
+              reasonCode: "IN_SCOPE",
+              reason: "Candidate request matches the active project scope",
+            },
+          });
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    const file = new File(["{}"], "sample.har", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+    await user.upload(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      file,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "INVESTIGATION" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Paper baseline"), "obs-100");
+    await user.selectOptions(screen.getByLabelText("Paper input"), "input-id");
+    await user.type(screen.getByLabelText("Baseline class"), "object id");
+    await user.type(screen.getByLabelText("Mutation value"), "200");
+    await user.type(
+      screen.getByLabelText("Expected policy"),
+      "The server should keep ownership checks in place.",
+    );
+    await user.type(
+      screen.getByLabelText("Authorized reason"),
+      "A bounded training environment with explicit permission.",
+    );
+    await user.type(
+      screen.getByLabelText("Expected result"),
+      "One controlled response change.",
+    );
+    await user.type(
+      screen.getByLabelText("Stop condition"),
+      "Stop if the response shows unexpected real data.",
+    );
+    await user.type(
+      screen.getByLabelText("Must remain constant"),
+      "host, method, and observation source",
+    );
+    expect(
+      calls.filter((entry) => entry.endsWith("/api/replay/prepare")),
+    ).toHaveLength(0);
+    await user.click(
+      screen.getByRole("button", { name: "SAVE PAPER WORKSHEET" }),
+    );
+    expect(localStorage.getItem("surfacetrace:paper-preview")).toContain(
+      "object id",
+    );
+    expect(screen.getByText(/Request sent: NO/i)).toBeTruthy();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
