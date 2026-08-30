@@ -14,6 +14,8 @@ SurfaceTrace helps you import authorized HTTP traffic, normalize it into investi
 - Deterministic endpoint clustering, review hypotheses, one-variable guards, diffs, and hash-linked evidence
 - Guided investigation loop comparing two imported observations against one declared input change
 - Local Fastify API with a development-origin CORS allowlist
+- Versioned local SQLite persistence with restart-safe evidence integrity
+- Fail-closed project scope configuration and non-network candidate previews
 - Command Center, Investigation, Classroom, and Evidence navigation
 - Complete six-track curriculum manifest with representative 15-minute lessons
 - Deterministic signal-to-lesson recommendations and local proficiency state
@@ -21,7 +23,6 @@ SurfaceTrace helps you import authorized HTTP traffic, normalize it into investi
 
 ## Planned later
 
-- SQLite-backed persistence
 - Controlled experiment runner
 - Interactive React Flow investigation graph
 - Remaining full curriculum prose
@@ -37,6 +38,7 @@ SurfaceTrace helps you import authorized HTTP traffic, normalize it into investi
 - Observations, hypotheses, experiments, evidence, and conclusions remain distinct
 - No active request execution until the controlled experiment runner exists
 - Current experiments compare previously imported authorized captures; they do not transmit traffic
+- Scope previews and redirect decisions evaluate candidates but never contact them
 
 ## Local development
 

@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import {
   EvidenceLedger,
+  RequestBudget,
   REDACTED,
   assertOneVariable,
   buildGraph,
@@ -10,6 +11,8 @@ import {
   generateHypotheses,
   hashPayload,
   importHar,
+  isRequestInScope,
+  evaluateRedirectTarget,
   parseHarJson,
   redactBody,
 } from "@surfacetrace/core";
@@ -20,9 +23,11 @@ import type {
   ExperimentMutation,
   ExperimentStatus,
   HypothesisStatus,
+  HttpMethod,
   IdentityContext,
   InputDescriptor,
   Observation,
+  ProjectScope,
   TesterConclusion,
   TrustBoundary,
   TrustBoundaryType,
@@ -75,6 +80,15 @@ const HYPOTHESIS_STATUSES = new Set<HypothesisStatus>([
   "not_supported",
   "needs_more_evidence",
   "closed",
+]);
+const HTTP_METHODS = new Set<HttpMethod>([
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
 ]);
 
 export interface AppOptions {
@@ -150,6 +164,13 @@ export function buildApp(options: AppOptions = {}) {
   const restored = persistence.load(activeProject.id);
   let activeImport: ImportRecord | null = restored?.activeImport ?? null;
   let ledger = new EvidenceLedger(restored?.evidence ?? []);
+  let projectScope: ProjectScope | null = restored?.scope ?? null;
+  const requestBudget = new RequestBudget();
+  if (projectScope)
+    requestBudget.restore(
+      projectScope.id,
+      projectScope.rateWindowTimestamps ?? [],
+    );
   let experiments: Experiment[] = restored?.experiments ?? [];
   let assets: Asset[] = restored?.assets ?? [];
   let trustBoundaries: TrustBoundary[] = restored?.trustBoundaries ?? [];
@@ -186,6 +207,7 @@ export function buildApp(options: AppOptions = {}) {
       hypotheses: lastHypotheses ?? [],
       experiments,
       evidence: [...ledger.all()],
+      scope: projectScope,
     };
   }
 
@@ -208,6 +230,12 @@ export function buildApp(options: AppOptions = {}) {
     lastHypotheses = snapshot.hypotheses.length ? snapshot.hypotheses : null;
     experiments = snapshot.experiments;
     ledger = new EvidenceLedger(snapshot.evidence);
+    projectScope = snapshot.scope;
+    if (projectScope)
+      requestBudget.restore(
+        projectScope.id,
+        projectScope.rateWindowTimestamps ?? [],
+      );
     refreshGraph();
   }
 
@@ -409,6 +437,153 @@ export function buildApp(options: AppOptions = {}) {
     valid: ledger.verify(),
     tip: ledger.tipHash(),
   }));
+  app.get("/scope", async () => ({
+    scope: projectScope,
+    status: projectScope?.active ? "ACTIVE_SCOPE" : "NO_ACTIVE_SCOPE",
+  }));
+  app.put<{ Body: Partial<ProjectScope> }>("/scope", async (request, reply) => {
+    const body = request.body ?? {};
+    const protocols = unique(body.allowedProtocols).map((item) =>
+      item.toLowerCase(),
+    );
+    const methods = unique(body.allowedMethods).map((item) =>
+      item.toUpperCase(),
+    );
+    const hosts = unique(body.allowedHosts).map((item) =>
+      item.trim().toLowerCase().replace(/\.$/, ""),
+    );
+    const ports = [...new Set(body.allowedPorts ?? [])].sort((a, b) => a - b);
+    const allowedPaths = unique(body.allowedPathPrefixes);
+    const excludedPaths = unique(body.excludedPathPrefixes);
+    if (
+      !hosts.length ||
+      hosts.some((item) => !item || /[\s/@]/.test(item)) ||
+      !protocols.length ||
+      protocols.some((item) => !["http", "https"].includes(item)) ||
+      !ports.length ||
+      ports.some(
+        (item) => !Number.isInteger(item) || item < 1 || item > 65535,
+      ) ||
+      !allowedPaths.length ||
+      [...allowedPaths, ...excludedPaths].some(
+        (item) => !item.startsWith("/"),
+      ) ||
+      !methods.length ||
+      methods.some((item) => !HTTP_METHODS.has(item as HttpMethod)) ||
+      !Number.isInteger(body.maxRequestsPerMinute) ||
+      Number(body.maxRequestsPerMinute) < 1 ||
+      (body.stopConditions?.maxRequestCount !== null &&
+        body.stopConditions?.maxRequestCount !== undefined &&
+        (!Number.isInteger(body.stopConditions.maxRequestCount) ||
+          Number(body.stopConditions.maxRequestCount) < 1))
+    )
+      return reply
+        .status(400)
+        .send({ error: "Invalid fail-closed scope configuration" });
+    const now = new Date().toISOString();
+    const previous = projectScope;
+    projectScope = {
+      id: previous?.id ?? crypto.randomUUID(),
+      projectId: activeProject.id,
+      active: body.active === true,
+      allowedHosts: hosts,
+      allowedProtocols: protocols as ProjectScope["allowedProtocols"],
+      allowedPorts: ports,
+      allowedPathPrefixes: allowedPaths,
+      excludedPathPrefixes: excludedPaths,
+      allowedMethods: methods as HttpMethod[],
+      maxRequestsPerMinute: Number(body.maxRequestsPerMinute),
+      rateWindowTimestamps: previous?.rateWindowTimestamps ?? [],
+      stopConditions: {
+        manualStop: body.stopConditions?.manualStop === true,
+        maxRequestCount:
+          body.stopConditions?.maxRequestCount === null ||
+          body.stopConditions?.maxRequestCount === undefined
+            ? null
+            : Number(body.stopConditions.maxRequestCount),
+        requestCount: previous?.stopConditions.requestCount ?? 0,
+        repeatedServerErrors:
+          body.stopConditions?.repeatedServerErrors === true,
+        authenticationLost: body.stopConditions?.authenticationLost === true,
+        customNote: redactBody(body.stopConditions?.customNote, "text/plain"),
+      },
+      notes: redactBody(body.notes, "text/plain"),
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const event = !previous
+      ? "scope_created"
+      : previous.active && !projectScope.active
+        ? "scope_disabled"
+        : !previous.stopConditions.manualStop &&
+            projectScope.stopConditions.manualStop
+          ? "manual_stop_activated"
+          : previous.stopConditions.manualStop &&
+              !projectScope.stopConditions.manualStop
+            ? "manual_stop_cleared"
+            : "scope_updated";
+    ledger.append("scope", {
+      event,
+      projectId: activeProject.id,
+      scopeId: projectScope.id,
+      active: projectScope.active,
+    });
+    return { scope: projectScope, evidenceTip: ledger.tipHash() };
+  });
+  app.post<{ Body: { method: string; url: string; body?: unknown } }>(
+    "/scope/preview",
+    async (request) => ({
+      decision: isRequestInScope(
+        {
+          method: request.body?.method ?? "",
+          url: request.body?.url ?? "",
+          body: request.body?.body,
+        },
+        projectScope,
+        {
+          rateAvailable: projectScope
+            ? requestBudget.canConsumeRequest(projectScope)
+            : false,
+        },
+      ),
+      requestSent: false,
+    }),
+  );
+  app.post<{ Body: { method: string; redirectUrl: string } }>(
+    "/scope/redirect-preview",
+    async (request) => ({
+      decision: evaluateRedirectTarget(
+        request.body?.method ?? "",
+        request.body?.redirectUrl ?? "",
+        projectScope,
+        {
+          rateAvailable: projectScope
+            ? requestBudget.canConsumeRequest(projectScope)
+            : false,
+        },
+      ),
+      redirectFollowed: false,
+    }),
+  );
+  app.post("/scope/budget/consume", async (_request, reply) => {
+    if (!projectScope?.active)
+      return reply.status(409).send({ error: "No active project scope" });
+    if (!requestBudget.consumeRequest(projectScope))
+      return reply.status(429).send({
+        decision: isRequestInScope(
+          { method: "GET", url: "https://invalid.local/" },
+          projectScope,
+          { rateAvailable: false },
+        ),
+      });
+    projectScope.stopConditions.requestCount += 1;
+    projectScope.rateWindowTimestamps = requestBudget.snapshot(projectScope.id);
+    projectScope.updatedAt = new Date().toISOString();
+    return {
+      consumed: true,
+      requestCount: projectScope.stopConditions.requestCount,
+    };
+  });
   app.get("/inventory", async (_request, reply) => {
     if (!lastImport || !lastGraph || !lastHypotheses)
       return reply
@@ -425,6 +600,7 @@ export function buildApp(options: AppOptions = {}) {
       experiments,
       graph: lastGraph,
       evidence: ledger.all(),
+      scope: projectScope,
     };
   });
   app.patch<{

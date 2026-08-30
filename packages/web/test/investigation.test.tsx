@@ -229,7 +229,7 @@ describe("investigation loop", () => {
     const file = new File(["{}"], "sample.har", { type: "application/json" });
     Object.defineProperty(file, "text", { value: async () => "{}" });
     await user.upload(fileInput!, file);
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(await screen.findByText("/api/projects/{id}")).toBeTruthy();
     await user.click(
       await screen.findByRole("button", { name: "INVESTIGATION" }),
@@ -822,6 +822,89 @@ describe("investigation loop", () => {
     expect(screen.getByText("WHY THIS MATTERS")).toBeTruthy();
     expect(screen.getByText(/You have not established that yet/)).toBeTruthy();
     expect(screen.queryByText(/SSRF FOUND/i)).toBeNull();
+  });
+
+  test("configures active scope and previews allow and deny decisions without network execution", async () => {
+    const user = userEvent.setup();
+    const configuredScope = {
+      id: "scope-1",
+      active: true,
+      allowedHosts: ["example.test"],
+      allowedProtocols: ["https"],
+      allowedPorts: [443],
+      allowedPathPrefixes: ["/api/"],
+      excludedPathPrefixes: ["/api/admin/"],
+      allowedMethods: ["GET"],
+      maxRequestsPerMinute: 10,
+      stopConditions: {
+        manualStop: false,
+        maxRequestCount: null,
+        requestCount: 0,
+        repeatedServerErrors: false,
+        authenticationLost: false,
+        customNote: null,
+      },
+      notes: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(request);
+        if (url.endsWith("/api/scope") && !init?.method)
+          return jsonResponse({ scope: null, status: "NO_ACTIVE_SCOPE" });
+        if (url.endsWith("/api/scope") && init?.method === "PUT")
+          return jsonResponse({
+            scope: configuredScope,
+            evidenceTip: "scope-tip",
+          });
+        if (url.endsWith("/api/scope/preview")) {
+          const body = JSON.parse(String(init?.body)) as { url: string };
+          const allowed = body.url.includes("example.test");
+          return jsonResponse({
+            requestSent: false,
+            decision: {
+              allowed,
+              reasonCode: allowed ? "IN_SCOPE" : "HOST_NOT_ALLOWED",
+              reason: allowed
+                ? "Candidate request matches the active project scope"
+                : "other.test is not included in allowedHosts",
+            },
+          });
+        }
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    expect(
+      (await screen.findAllByText(/NO ACTIVE SCOPE - EXECUTION DISABLED/))
+        .length,
+    ).toBeGreaterThan(0);
+    await user.type(screen.getByLabelText("Allowed hosts"), "example.test");
+    await user.clear(screen.getByLabelText("Allowed paths"));
+    await user.type(screen.getByLabelText("Allowed paths"), "/api/");
+    await user.click(screen.getByLabelText("Enable active scope"));
+    await user.click(screen.getByRole("button", { name: "SAVE SCOPE" }));
+    expect((await screen.findAllByText("ACTIVE SCOPE")).length).toBeGreaterThan(
+      0,
+    );
+    await user.type(
+      screen.getByLabelText("Candidate URL"),
+      "https://example.test/api/users",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "CHECK SCOPE - NO NETWORK" }),
+    );
+    expect(await screen.findByText("IN SCOPE")).toBeTruthy();
+    await user.clear(screen.getByLabelText("Candidate URL"));
+    await user.type(
+      screen.getByLabelText("Candidate URL"),
+      "https://other.test/api/users",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "CHECK SCOPE - NO NETWORK" }),
+    );
+    expect(await screen.findByText("OUT OF SCOPE")).toBeTruthy();
+    expect(screen.getByText("HOST_NOT_ALLOWED")).toBeTruthy();
   });
 });
 

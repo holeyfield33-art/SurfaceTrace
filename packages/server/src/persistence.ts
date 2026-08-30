@@ -10,10 +10,11 @@ import type {
   IdentityContext,
   InputDescriptor,
   Observation,
+  ProjectScope,
   TrustBoundary,
 } from "@surfacetrace/core";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface ProjectRecord {
   id: string;
@@ -43,6 +44,7 @@ export interface PersistedState {
   hypotheses: Hypothesis[];
   experiments: Experiment[];
   evidence: EvidenceRecord[];
+  scope: ProjectScope | null;
 }
 
 const ENTITY_TABLES = [
@@ -55,6 +57,7 @@ const ENTITY_TABLES = [
   "experiments",
   "experiment_evidence_links",
   "evidence_records",
+  "project_scopes",
 ] as const;
 
 export class SqlitePersistence {
@@ -182,6 +185,7 @@ export class SqlitePersistence {
       hypotheses: readPayloads<Hypothesis>("hypotheses"),
       experiments: readPayloads<Experiment>("experiments"),
       evidence: readPayloads<EvidenceRecord>("evidence_records"),
+      scope: readPayloads<ProjectScope>("project_scopes")[0] ?? null,
     };
   }
 
@@ -239,6 +243,11 @@ export class SqlitePersistence {
         "evidence_records",
         state.project.id,
         state.evidence,
+      );
+      this.writeProjectEntities(
+        "project_scopes",
+        state.project.id,
+        state.scope ? [state.scope] : [],
       );
       for (const [order, identity] of state.identities.entries())
         for (const observationId of identity.associatedObservationIds)
@@ -328,6 +337,15 @@ export class SqlitePersistence {
       .get();
     if (hasVersion) {
       const version = this.schemaVersion();
+      if (version === 1) {
+        this.db.exec(`
+          BEGIN;
+          CREATE TABLE project_scopes (id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id), row_order INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, project_id));
+          UPDATE schema_version SET version = 2;
+          COMMIT;
+        `);
+        return;
+      }
       if (version !== SCHEMA_VERSION)
         throw new Error(
           `Unsupported SurfaceTrace database schema version ${version}; expected ${SCHEMA_VERSION}`,

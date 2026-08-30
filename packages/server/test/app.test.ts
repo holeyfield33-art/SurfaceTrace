@@ -6,6 +6,160 @@ import { buildApp } from "../src/app.js";
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
+  test("persists scope lifecycle and previews candidates without network activity", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-scope-"));
+    const dbPath = join(directory, "scope.db");
+    const configuration = {
+      active: true,
+      allowedHosts: ["example.test"],
+      allowedProtocols: ["https"],
+      allowedPorts: [443],
+      allowedPathPrefixes: ["/api/"],
+      excludedPathPrefixes: ["/api/admin/"],
+      allowedMethods: ["GET", "POST"],
+      maxRequestsPerMinute: 2,
+      stopConditions: {
+        manualStop: false,
+        maxRequestCount: null,
+        repeatedServerErrors: false,
+        authenticationLost: false,
+        customNote: null,
+      },
+      notes: "Authorized test scope",
+    };
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    try {
+      first = buildApp({ logger: false, dbPath });
+      expect(
+        (await first.inject({ method: "GET", url: "/scope" })).json(),
+      ).toMatchObject({ scope: null, status: "NO_ACTIVE_SCOPE" });
+      const missing = await first.inject({
+        method: "POST",
+        url: "/scope/preview",
+        payload: { method: "GET", url: "https://example.test/api/users" },
+      });
+      expect(missing.json()).toMatchObject({
+        requestSent: false,
+        decision: { allowed: false, reasonCode: "NO_ACTIVE_SCOPE" },
+      });
+      expect(
+        (
+          await first.inject({
+            method: "PUT",
+            url: "/scope",
+            payload: configuration,
+          })
+        ).statusCode,
+      ).toBe(200);
+      const allowed = await first.inject({
+        method: "POST",
+        url: "/scope/preview",
+        payload: { method: "GET", url: "https://example.test/api/users" },
+      });
+      expect(allowed.json()).toMatchObject({
+        requestSent: false,
+        decision: { allowed: true, reasonCode: "IN_SCOPE" },
+      });
+      const denied = await first.inject({
+        method: "POST",
+        url: "/scope/preview",
+        payload: { method: "GET", url: "https://other.test/api/users" },
+      });
+      expect(denied.json().decision).toMatchObject({
+        allowed: false,
+        reasonCode: "HOST_NOT_ALLOWED",
+      });
+      const redirect = await first.inject({
+        method: "POST",
+        url: "/scope/redirect-preview",
+        payload: { method: "GET", redirectUrl: "https://other.test/" },
+      });
+      expect(redirect.json()).toMatchObject({
+        redirectFollowed: false,
+        decision: { allowed: false, reasonCode: "HOST_NOT_ALLOWED" },
+      });
+      expect(
+        (
+          await first.inject({
+            method: "POST",
+            url: "/scope/budget/consume",
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await first.inject({
+            method: "POST",
+            url: "/scope/budget/consume",
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await first.inject({
+            method: "POST",
+            url: "/scope/preview",
+            payload: {
+              method: "GET",
+              url: "https://example.test/api/users",
+            },
+          })
+        ).json().decision.reasonCode,
+      ).toBe("RATE_LIMIT_EXHAUSTED");
+      await first.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: {
+          ...configuration,
+          stopConditions: { ...configuration.stopConditions, manualStop: true },
+        },
+      });
+      const stopped = await first.inject({
+        method: "POST",
+        url: "/scope/preview",
+        payload: { method: "GET", url: "https://example.test/api/users" },
+      });
+      expect(stopped.json().decision.reasonCode).toBe("MANUAL_STOP_ACTIVE");
+      const evidenceBefore = (
+        await first.inject({ method: "GET", url: "/evidence" })
+      ).json();
+      expect(
+        evidenceBefore.records.map(
+          (item: { payload: { event?: string } }) => item.payload.event,
+        ),
+      ).toEqual(
+        expect.arrayContaining(["scope_created", "manual_stop_activated"]),
+      );
+      await first.close();
+      first = null;
+
+      second = buildApp({ logger: false, dbPath });
+      expect(
+        (await second.inject({ method: "GET", url: "/scope" })).json(),
+      ).toMatchObject({
+        status: "ACTIVE_SCOPE",
+        scope: {
+          allowedHosts: ["example.test"],
+          stopConditions: { manualStop: true, requestCount: 2 },
+        },
+      });
+      expect(
+        (await second.inject({ method: "GET", url: "/scope" })).json().scope
+          .rateWindowTimestamps,
+      ).toHaveLength(2);
+      expect(
+        (await second.inject({ method: "GET", url: "/evidence" })).json(),
+      ).toEqual(evidenceBefore);
+      await second.close();
+      second = null;
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("creates a versioned local database and default project", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));
     const dbPath = join(directory, "surfacetrace.db");
@@ -14,7 +168,7 @@ describe("local API trust boundary", () => {
       expect(
         (await app.inject({ method: "GET", url: "/health" })).json(),
       ).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         ledgerValid: true,
       });
       const projects = (

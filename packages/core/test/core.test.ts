@@ -7,6 +7,9 @@ import {
   buildGraph,
   compareObservations,
   generateHypotheses,
+  isRequestInScope,
+  evaluateRedirectTarget,
+  RequestBudget,
   importHar,
   parseHarJson,
   redactHeaders,
@@ -23,6 +26,7 @@ import type {
   InputDescriptor,
   Observation,
   TrustBoundary,
+  ProjectScope,
 } from "../src/types.js";
 import type { HarFile } from "../src/har/types.js";
 
@@ -774,6 +778,184 @@ describe("threat map relationships", () => {
         `${experiment.id}->${hypothesis.id}`,
       ]),
     );
+  });
+});
+
+describe("runtime scope decision", () => {
+  const scope = (overrides: Partial<ProjectScope> = {}): ProjectScope => ({
+    id: "scope-1",
+    projectId: "project-1",
+    active: true,
+    allowedHosts: ["example.test"],
+    allowedProtocols: ["https"],
+    allowedPorts: [443],
+    allowedPathPrefixes: ["/api/"],
+    excludedPathPrefixes: ["/api/admin/"],
+    allowedMethods: ["GET", "POST"],
+    maxRequestsPerMinute: 2,
+    stopConditions: {
+      manualStop: false,
+      maxRequestCount: null,
+      requestCount: 0,
+      repeatedServerErrors: false,
+      authenticationLost: false,
+      customNote: null,
+    },
+    notes: null,
+    createdAt: "now",
+    updatedAt: "now",
+    ...overrides,
+  });
+  const decide = (
+    url = "https://example.test/api/users",
+    method = "GET",
+    configured: ProjectScope | null = scope(),
+    rateAvailable = true,
+  ) => isRequestInScope({ method, url }, configured, { rateAvailable });
+
+  test.each([
+    [null, "https://example.test/api/users", "GET", "NO_ACTIVE_SCOPE"],
+    [
+      scope({ active: false }),
+      "https://example.test/api/users",
+      "GET",
+      "NO_ACTIVE_SCOPE",
+    ],
+    [scope(), "not a URL", "GET", "MALFORMED_URL"],
+    [
+      scope(),
+      "https://user:pass@example.test/api/users",
+      "GET",
+      "USERINFO_NOT_ALLOWED",
+    ],
+    [scope(), "https://other.test/api/users", "GET", "HOST_NOT_ALLOWED"],
+    [scope(), "https://api.example.test/api/users", "GET", "HOST_NOT_ALLOWED"],
+    [scope(), "https://evil-example.test/api/users", "GET", "HOST_NOT_ALLOWED"],
+    [scope(), "https://192.0.2.10/api/users", "GET", "HOST_NOT_ALLOWED"],
+    [scope(), "ftp://example.test/api/users", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "file:///api/users", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "gopher://example.test/api/users", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "data:text/plain,hello", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "javascript:alert(1)", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "ws://example.test/api/users", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "wss://example.test/api/users", "GET", "PROTOCOL_NOT_ALLOWED"],
+    [scope(), "https://example.test:8443/api/users", "GET", "PORT_NOT_ALLOWED"],
+    [scope(), "https://example.test/api/admin/users", "GET", "PATH_EXCLUDED"],
+    [scope(), "https://example.test/api/%61dmin/users", "GET", "PATH_EXCLUDED"],
+    [scope(), "https://example.test/public", "GET", "PATH_NOT_ALLOWED"],
+    [scope(), "https://example.test/api/users", "DELETE", "METHOD_NOT_ALLOWED"],
+    [
+      scope({
+        stopConditions: { ...scope().stopConditions, manualStop: true },
+      }),
+      "https://example.test/api/users",
+      "GET",
+      "MANUAL_STOP_ACTIVE",
+    ],
+  ] as const)("fails closed for case %#", (configured, url, method, code) => {
+    expect(decide(url, method, configured)).toMatchObject({
+      allowed: false,
+      reasonCode: code,
+    });
+  });
+
+  test.each([
+    ["https://example.test/api/users", scope()],
+    ["https://EXAMPLE.TEST./api/users", scope()],
+    ["https://example.test:443/api/users", scope()],
+    ["https://example.test:8443/api/users", scope({ allowedPorts: [8443] })],
+    [
+      "http://example.test/api/users",
+      scope({ allowedProtocols: ["http"], allowedPorts: [80] }),
+    ],
+    [
+      "https://[2001:db8::1]/api/users",
+      scope({ allowedHosts: ["2001:db8::1"] }),
+    ],
+  ] as const)(
+    "allows explicitly configured candidate %#",
+    (url, configured) => {
+      expect(decide(url, "get", configured)).toMatchObject({
+        allowed: true,
+        reasonCode: "IN_SCOPE",
+      });
+    },
+  );
+
+  test("exclusions override normalized dot-segment paths", () => {
+    expect(
+      decide("https://example.test/api/public/../admin/users"),
+    ).toMatchObject({
+      allowed: false,
+      reasonCode: "PATH_EXCLUDED",
+    });
+  });
+
+  test("double-encoded traversal cannot bypass an excluded path", () => {
+    expect(
+      decide("https://example.test/api/public/%252e%252e/admin/users"),
+    ).toMatchObject({ allowed: false, reasonCode: "PATH_EXCLUDED" });
+  });
+
+  test("re-evaluates every redirect target independently", () => {
+    expect(
+      evaluateRedirectTarget("GET", "https://other.test/api/users", scope()),
+    ).toMatchObject({ allowed: false, reasonCode: "HOST_NOT_ALLOWED" });
+    expect(
+      evaluateRedirectTarget("GET", "https://example.test/api/next", scope()),
+    ).toMatchObject({ allowed: true, reasonCode: "IN_SCOPE" });
+  });
+
+  test("denies when the rolling request budget is exhausted and resets by time", () => {
+    const budget = new RequestBudget();
+    const configured = scope();
+    expect(budget.consumeRequest(configured, 1_000)).toBe(true);
+    expect(budget.consumeRequest(configured, 2_000)).toBe(true);
+    expect(budget.canConsumeRequest(configured, 3_000)).toBe(false);
+    expect(
+      decide("https://example.test/api/users", "GET", configured, false)
+        .reasonCode,
+    ).toBe("RATE_LIMIT_EXHAUSTED");
+    const restored = new RequestBudget();
+    restored.restore(configured.id, budget.snapshot(configured.id, 3_000));
+    expect(restored.canConsumeRequest(configured, 3_000)).toBe(false);
+    expect(budget.canConsumeRequest(configured, 62_000)).toBe(true);
+  });
+
+  test.each([
+    [{ maxRequestCount: 2, requestCount: 2 }, "MAX_REQUEST_COUNT_REACHED"],
+    [{ repeatedServerErrors: true }, "REPEATED_SERVER_ERRORS"],
+    [{ authenticationLost: true }, "AUTHENTICATION_LOST"],
+  ])("enforces stop condition %#", (stop, reasonCode) => {
+    const configured = scope({
+      stopConditions: { ...scope().stopConditions, ...stop },
+    });
+    expect(
+      decide("https://example.test/api/users", "GET", configured),
+    ).toMatchObject({
+      allowed: false,
+      reasonCode,
+    });
+  });
+
+  test("does not treat an SSRF-like body destination as execution permission", () => {
+    const configured = scope({ allowedHosts: ["target.example"] });
+    expect(
+      isRequestInScope(
+        {
+          method: "POST",
+          url: "https://target.example/api/fetch",
+          body: { url: "http://internal.example/" },
+        },
+        configured,
+      ),
+    ).toMatchObject({ allowed: true, reasonCode: "IN_SCOPE" });
+    expect(
+      isRequestInScope(
+        { method: "GET", url: "http://internal.example/" },
+        configured,
+      ),
+    ).toMatchObject({ allowed: false });
   });
 });
 

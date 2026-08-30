@@ -639,6 +639,94 @@
   padding-left: 1.25rem;
 }
 
+.scope-panel {
+  grid-column: 1 / -1;
+  border-top: 4px solid var(--ink);
+}
+
+.scope-banner {
+  display: inline-block;
+  margin: 0.9rem 0;
+  padding: 0.55rem 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.scope-banner.active,
+.scope.active {
+  background: #d9f06b;
+  color: #17210b;
+}
+
+.scope-banner.disabled,
+.scope.disabled {
+  background: #ff765f;
+  color: #2b0d09;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 1rem 0;
+}
+
+.scope-grid label,
+.candidate-preview {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.scope-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.candidate-preview {
+  grid-template-columns: 8rem minmax(15rem, 1fr) auto;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.candidate-preview h3,
+.scope-decision {
+  grid-column: 1 / -1;
+}
+
+.scope-decision {
+  padding: 0.8rem;
+  border-left: 5px solid;
+}
+
+.scope-decision.allow {
+  border-color: #7d9c10;
+  background: #eef7c8;
+}
+
+.scope-decision.deny {
+  border-color: #c83e28;
+  background: #ffe0da;
+}
+
+.scope-decision code {
+  margin-left: 0.8rem;
+}
+
+@media (max-width: 760px) {
+  .scope-grid,
+  .candidate-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-preview h3,
+  .scope-decision {
+    grid-column: auto;
+  }
+}
+
 @media (max-width: 800px) {
   .inspector-heading {
     grid-template-columns: 1fr;

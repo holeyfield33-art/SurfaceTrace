@@ -34,3 +34,9 @@ export type { DeepDiffLimits } from "./diff/compare.js";
 
 export { canonicalize, sha256, hashPayload } from "./evidence/hash.js";
 export { EvidenceLedger } from "./evidence/ledger.js";
+export {
+  isRequestInScope,
+  evaluateRedirectTarget,
+  RequestBudget,
+} from "./scope/scope.js";
+export type { ScopeEvaluationContext } from "./scope/scope.js";

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   curriculum,
   lessonById,
@@ -171,6 +171,27 @@ interface Inventory {
   assets?: AssetAnnotation[];
   trustBoundaries?: BoundaryAnnotation[];
   graph?: GraphView;
+  scope?: ProjectScope | null;
+}
+interface ProjectScope {
+  id?: string;
+  active: boolean;
+  allowedHosts: string[];
+  allowedProtocols: string[];
+  allowedPorts: number[];
+  allowedPathPrefixes: string[];
+  excludedPathPrefixes: string[];
+  allowedMethods: string[];
+  maxRequestsPerMinute: number;
+  stopConditions: {
+    manualStop: boolean;
+    maxRequestCount: number | null;
+    requestCount?: number;
+    repeatedServerErrors: boolean;
+    authenticationLost: boolean;
+    customNote: string | null;
+  };
+  notes: string | null;
 }
 const emptyInventory: Inventory = {
   observations: [],
@@ -196,6 +217,7 @@ export default function App() {
   const [returnView, setReturnView] = useState<View>("investigation");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState<ProjectScope | null>(null);
   const [skills, setSkills] = useState<Record<string, SkillState>>(() => {
     try {
       return JSON.parse(localStorage.getItem("surfacetrace:skills") ?? "{}");
@@ -219,6 +241,22 @@ export default function App() {
         hypothesisSignals: hypotheses.map((item) => item.signal),
       })
     : [];
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/scope")
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as { scope: ProjectScope | null })
+          : null,
+      )
+      .then((result) => {
+        if (active && result) setScope(result.scope);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function chooseEndpoint(id: string): void {
     setEndpointId(id);
@@ -240,6 +278,7 @@ export default function App() {
     if (!response.ok) throw new Error("Inventory could not be loaded");
     const next = (await response.json()) as Inventory;
     setInventory(next);
+    setScope(next.scope ?? null);
     return next;
   }
   async function importFile(file: File): Promise<void> {
@@ -273,8 +312,11 @@ export default function App() {
           <small>CURRENT INVESTIGATION</small>
           <strong>{endpoint?.host ?? "Awaiting authorized traffic"}</strong>
         </div>
-        <div className="scope">
-          <i /> SCOPE CONFIRMED
+        <div className={`scope ${scope?.active ? "active" : "disabled"}`}>
+          <i />{" "}
+          {scope?.active
+            ? "ACTIVE SCOPE"
+            : "NO ACTIVE SCOPE - EXECUTION DISABLED"}
         </div>
       </header>
       <nav className="primary-nav" aria-label="Main navigation">
@@ -301,6 +343,8 @@ export default function App() {
           onImport={importFile}
           onInvestigate={() => setView("investigation")}
           onLesson={(item) => openLesson(item, "command")}
+          scope={scope}
+          onScope={setScope}
         />
       )}
       {view === "investigation" && (
@@ -344,6 +388,8 @@ function CommandCenter({
   onImport,
   onInvestigate,
   onLesson,
+  scope,
+  onScope,
 }: {
   inventory: Inventory;
   endpoint?: Endpoint;
@@ -354,6 +400,8 @@ function CommandCenter({
   onImport: (file: File) => void;
   onInvestigate: () => void;
   onLesson: (lesson: Lesson) => void;
+  scope: ProjectScope | null;
+  onScope: (scope: ProjectScope) => void;
 }) {
   return (
     <main className="dashboard reveal">
@@ -454,7 +502,226 @@ function CommandCenter({
           <small>{inventory.observations.length} normalized observations</small>
         </div>
       </section>
+      <ScopePanel
+        key={scope?.id ?? "no-scope"}
+        scope={scope}
+        onScope={onScope}
+      />
     </main>
+  );
+}
+
+function ScopePanel({
+  scope,
+  onScope,
+}: {
+  scope: ProjectScope | null;
+  onScope: (scope: ProjectScope) => void;
+}) {
+  const [hosts, setHosts] = useState(scope?.allowedHosts.join(", ") ?? "");
+  const [protocols, setProtocols] = useState(
+    scope?.allowedProtocols.join(", ") ?? "https",
+  );
+  const [ports, setPorts] = useState(scope?.allowedPorts.join(", ") ?? "443");
+  const [allowedPaths, setAllowedPaths] = useState(
+    scope?.allowedPathPrefixes.join(", ") ?? "/",
+  );
+  const [excludedPaths, setExcludedPaths] = useState(
+    scope?.excludedPathPrefixes.join(", ") ?? "",
+  );
+  const [methods, setMethods] = useState(
+    scope?.allowedMethods.join(", ") ?? "GET",
+  );
+  const [rate, setRate] = useState(String(scope?.maxRequestsPerMinute ?? 10));
+  const [active, setActive] = useState(scope?.active ?? false);
+  const [manualStop, setManualStop] = useState(
+    scope?.stopConditions.manualStop ?? false,
+  );
+  const [candidateMethod, setCandidateMethod] = useState("GET");
+  const [candidateUrl, setCandidateUrl] = useState("");
+  const [decision, setDecision] = useState<{
+    allowed: boolean;
+    reasonCode: string;
+    reason: string;
+  } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const csv = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  async function save(): Promise<void> {
+    const response = await fetch("/api/scope", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        active,
+        allowedHosts: csv(hosts),
+        allowedProtocols: csv(protocols),
+        allowedPorts: csv(ports).map(Number),
+        allowedPathPrefixes: csv(allowedPaths),
+        excludedPathPrefixes: csv(excludedPaths),
+        allowedMethods: csv(methods),
+        maxRequestsPerMinute: Number(rate),
+        stopConditions: {
+          manualStop,
+          maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
+          repeatedServerErrors: false,
+          authenticationLost: false,
+          customNote: null,
+        },
+        notes: scope?.notes ?? null,
+      }),
+    });
+    const result = (await response.json()) as {
+      scope?: ProjectScope;
+      error?: string;
+    };
+    if (!response.ok || !result.scope) {
+      setMessage(result.error ?? "Scope could not be saved");
+      return;
+    }
+    onScope(result.scope);
+    setMessage("Scope saved. No request was sent.");
+  }
+  async function preview(): Promise<void> {
+    const response = await fetch("/api/scope/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
+    });
+    const result = (await response.json()) as {
+      decision: { allowed: boolean; reasonCode: string; reason: string };
+    };
+    setDecision(result.decision);
+  }
+  return (
+    <section className="panel scope-panel">
+      <PanelLabel number="06" label="RUNTIME SCOPE GATE" />
+      <div className={`scope-banner ${scope?.active ? "active" : "disabled"}`}>
+        {scope?.active
+          ? "ACTIVE SCOPE"
+          : "NO ACTIVE SCOPE - EXECUTION DISABLED"}
+      </div>
+      <p>
+        Configure explicit permission for future candidate requests.
+        SurfaceTrace does not send requests from this panel.
+      </p>
+      <div className="scope-grid">
+        <label>
+          Allowed hosts
+          <input
+            aria-label="Allowed hosts"
+            value={hosts}
+            onChange={(event) => setHosts(event.target.value)}
+            placeholder="example.test"
+          />
+        </label>
+        <label>
+          Protocols
+          <input
+            aria-label="Allowed protocols"
+            value={protocols}
+            onChange={(event) => setProtocols(event.target.value)}
+          />
+        </label>
+        <label>
+          Ports
+          <input
+            aria-label="Allowed ports"
+            value={ports}
+            onChange={(event) => setPorts(event.target.value)}
+          />
+        </label>
+        <label>
+          Allowed paths
+          <input
+            aria-label="Allowed paths"
+            value={allowedPaths}
+            onChange={(event) => setAllowedPaths(event.target.value)}
+          />
+        </label>
+        <label>
+          Excluded paths
+          <input
+            aria-label="Excluded paths"
+            value={excludedPaths}
+            onChange={(event) => setExcludedPaths(event.target.value)}
+            placeholder="/api/admin/"
+          />
+        </label>
+        <label>
+          Methods
+          <input
+            aria-label="Allowed methods"
+            value={methods}
+            onChange={(event) => setMethods(event.target.value)}
+          />
+        </label>
+        <label>
+          Requests per minute
+          <input
+            aria-label="Requests per minute"
+            type="number"
+            min="1"
+            value={rate}
+            onChange={(event) => setRate(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="scope-toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={active}
+            onChange={(event) => setActive(event.target.checked)}
+          />{" "}
+          Enable active scope
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={manualStop}
+            onChange={(event) => setManualStop(event.target.checked)}
+          />{" "}
+          Manual stop
+        </label>
+      </div>
+      <button className="action" onClick={() => void save()}>
+        SAVE SCOPE
+      </button>
+      {message && <p>{message}</p>}
+      <div className="candidate-preview">
+        <h3>CANDIDATE REQUEST PREVIEW</h3>
+        <select
+          aria-label="Candidate method"
+          value={candidateMethod}
+          onChange={(event) => setCandidateMethod(event.target.value)}
+        >
+          {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(
+            (method) => (
+              <option key={method}>{method}</option>
+            ),
+          )}
+        </select>
+        <input
+          aria-label="Candidate URL"
+          value={candidateUrl}
+          onChange={(event) => setCandidateUrl(event.target.value)}
+          placeholder="https://example.test/api/users/100"
+        />
+        <button onClick={() => void preview()}>CHECK SCOPE - NO NETWORK</button>
+        {decision && (
+          <div
+            className={`scope-decision ${decision.allowed ? "allow" : "deny"}`}
+          >
+            <b>{decision.allowed ? "IN SCOPE" : "OUT OF SCOPE"}</b>
+            <code>{decision.reasonCode}</code>
+            <p>{decision.reason}</p>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

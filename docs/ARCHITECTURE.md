@@ -6,8 +6,8 @@ SurfaceTrace is a local-first, deterministic investigation command center with a
 
 ```text
 packages/
-  core/       Pure TypeScript HAR, graph, threat, experiment, diff, and evidence logic
-  server/     Bounded Fastify local API with in-memory milestone state
+  core/       Pure TypeScript HAR, graph, threat, experiment, diff, evidence, and scope logic
+  server/     Bounded Fastify local API with versioned SQLite persistence
   web/        React cockpit, static curriculum, and contextual lesson mappings
 fixtures/     Authorized, synthetic HAR data used by tests and demos
 docs/         Architecture and workflow documentation
@@ -25,6 +25,7 @@ docs/         Architecture and workflow documentation
 8. Experiment: the tester chooses two imported observations and declares exactly one changed input.
 9. Validate: the API verifies endpoint, hypothesis, input, and observation relationships before comparison.
 10. Compare: a deterministic diff produces a `same` or `different` state and appends separate experiment and diff evidence records.
+11. Gate: the scope engine evaluates a fully specified candidate or redirect target against explicit project rules without sending traffic.
 
 ## Input Model
 
@@ -41,10 +42,15 @@ Input descriptors contain a name, location, inferred type, endpoint relationship
 - Observations, hypotheses, experiments, evidence, and conclusions remain distinct.
 - Diffs and evidence hashes are deterministic.
 - No autonomous scanning or active request execution exists in this milestone; experiments compare imported captures only.
+- Missing or invalid scope fails closed, and every proposed redirect target is evaluated independently.
 
 ## State And Storage
 
-Investigation data is persisted by the server in a local, versioned SQLite database. The adapter stores only canonical redacted observations and preserves projects, imports, identity assignments, threat annotations, hypotheses, experiments, deep diffs, links, and exact append-only evidence records across restart. `SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`; schema mismatches fail without destructive recreation. Lesson proficiency and current endpoint/lesson context continue to use local browser storage.
+Investigation data is persisted by the server in a local, versioned SQLite database. The adapter stores only canonical redacted observations and preserves projects, imports, identity assignments, threat annotations, hypotheses, experiments, deep diffs, links, project scope, and exact append-only evidence records across restart. `SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`; supported migrations are non-destructive and unknown schema versions fail clearly. Lesson proficiency and current endpoint/lesson context continue to use local browser storage.
+
+## Scope Boundary
+
+The canonical core scope engine evaluates protocol, exact host, normalized port, decoded path, method, stop-state, and rate-budget rules. Exclusions override path allowances. Redirect candidates are re-evaluated independently. Candidate bodies are not interpreted as permission for destination-like values, DNS is never resolved, and the preview API contains no network client or redirect follower.
 
 ## Learning Boundary
 
@@ -52,4 +58,4 @@ The curriculum is a static manifest in `packages/web/src/lessons`. Recommendatio
 
 ## Future Boundaries
 
-Active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. Scope, authorization, rate controls, and stop conditions must be implemented before active execution is enabled.
+Active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. P8 supplies only the prerequisite decision boundary; active replay remains disabled pending separate review.

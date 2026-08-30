@@ -95,6 +95,63 @@ export interface ScopedTarget {
   createdAt: string;
 }
 
+export interface ProjectScope {
+  id: string;
+  projectId: string;
+  active: boolean;
+  allowedHosts: string[];
+  allowedProtocols: Array<"http" | "https">;
+  allowedPorts: number[];
+  allowedPathPrefixes: string[];
+  excludedPathPrefixes: string[];
+  allowedMethods: HttpMethod[];
+  maxRequestsPerMinute: number;
+  rateWindowTimestamps?: number[];
+  stopConditions: ScopeStopConditions;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScopeStopConditions {
+  manualStop: boolean;
+  maxRequestCount: number | null;
+  requestCount: number;
+  repeatedServerErrors: boolean;
+  authenticationLost: boolean;
+  customNote: string | null;
+}
+
+export interface CandidateRequest {
+  method: string;
+  url: string;
+  body?: unknown;
+}
+
+export type ScopeReasonCode =
+  | "IN_SCOPE"
+  | "NO_ACTIVE_SCOPE"
+  | "MALFORMED_URL"
+  | "USERINFO_NOT_ALLOWED"
+  | "PROTOCOL_NOT_ALLOWED"
+  | "HOST_NOT_ALLOWED"
+  | "PORT_NOT_ALLOWED"
+  | "PATH_NOT_ALLOWED"
+  | "PATH_EXCLUDED"
+  | "METHOD_NOT_ALLOWED"
+  | "MANUAL_STOP_ACTIVE"
+  | "MAX_REQUEST_COUNT_REACHED"
+  | "REPEATED_SERVER_ERRORS"
+  | "AUTHENTICATION_LOST"
+  | "RATE_LIMIT_EXHAUSTED";
+
+export interface ScopeDecision {
+  allowed: boolean;
+  reasonCode: ScopeReasonCode;
+  reason: string;
+  matchedRule: string | null;
+}
+
 export interface Endpoint {
   id: string;
   method: HttpMethod;
