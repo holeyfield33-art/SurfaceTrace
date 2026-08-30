@@ -680,4 +680,3 @@ If the issue remains, preserve the exact error text, route, and safe reproductio
 The current version intentionally does not include a traffic-capture proxy, crawler, scanner, bulk replay, fuzzing engine, payload library, automatic ID iteration, automatic redirect following, retries, automatic attack generation, autonomous exploitation, AI vulnerability verdicts, internet-wide scanning, or cloud collection of raw sessions.
 
 A full free-form threat-diagram editor and automatic proxy integration are also not present. Use browser DevTools, Burp Suite, or Caido for authorized capture and manual proxy work, then use SurfaceTrace for structured investigation and evidence.
-
