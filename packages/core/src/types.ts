@@ -208,6 +208,21 @@ export interface Hypothesis {
   evidenceIds: string[];
   notes: string | null;
   provenance: "inferred";
+  reasoning?: HypothesisReasoning | null;
+}
+
+export interface HypothesisReasoning {
+  category: "ssrf" | "redirect";
+  inputId: string;
+  inputName: string;
+  inputLocation: InputLocation;
+  signalType: "input_name" | "absolute_url" | "endpoint_context";
+  signalReason: string;
+  signalStrength: "strong" | "moderate" | "contextual";
+  valueClass: "absolute URL" | null;
+  followUpQuestion: string | null;
+  teachingContext: string;
+  nextSteps: string[];
 }
 
 export interface ExperimentMutation {

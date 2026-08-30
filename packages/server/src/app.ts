@@ -207,9 +207,27 @@ export function buildApp(options: AppOptions = {}) {
         detail: error instanceof Error ? error.message : String(error),
       });
     }
-    const hypotheses = generateHypotheses(result.endpoints, result.inputs);
+    const hypotheses = generateHypotheses(
+      result.endpoints,
+      result.inputs,
+      result.observations,
+    );
     lastImport = result;
     lastHypotheses = hypotheses;
+    for (const hypothesis of hypotheses.filter(
+      (item) => item.reasoning?.category === "ssrf",
+    )) {
+      const reasoning = hypothesis.reasoning!;
+      const evidence = ledger.append("note", {
+        endpointId: hypothesis.endpointId,
+        inputId: reasoning.inputId,
+        signalType: reasoning.signalType,
+        signalReason: reasoning.signalReason,
+        generatedQuestion: hypothesis.question,
+        provenance: "inferred",
+      });
+      hypothesis.evidenceIds.push(evidence.id);
+    }
     refreshGraph();
     ledger.append("observation", {
       count: result.observations.length,

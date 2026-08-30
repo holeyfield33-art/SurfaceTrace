@@ -622,6 +622,23 @@
   margin-top: 10px;
 }
 
+.follow-up-question {
+  border-left: 3px solid var(--signal);
+  padding-left: 0.8rem;
+}
+
+.teaching-context {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--signal) 45%, transparent);
+  background: color-mix(in srgb, var(--signal) 8%, transparent);
+}
+
+.teaching-context ol {
+  margin-bottom: 0;
+  padding-left: 1.25rem;
+}
+
 @media (max-width: 800px) {
   .inspector-heading {
     grid-template-columns: 1fr;

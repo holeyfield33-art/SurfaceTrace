@@ -41,6 +41,19 @@ interface Hypothesis {
   evidenceIds?: string[];
   notes?: string | null;
   provenance?: "inferred";
+  reasoning?: {
+    category: "ssrf" | "redirect";
+    inputId: string;
+    inputName: string;
+    inputLocation: string;
+    signalType: string;
+    signalReason: string;
+    signalStrength: "strong" | "moderate" | "contextual";
+    valueClass: "absolute URL" | null;
+    followUpQuestion: string | null;
+    teachingContext: string;
+    nextSteps: string[];
+  } | null;
 }
 interface AssetAnnotation {
   id: string;
@@ -1329,7 +1342,9 @@ function ThreatCard({
   return (
     <article className="threat-card">
       <header>
-        <span>INFERRED</span>
+        <span>
+          {hypothesis.reasoning ? "INFERRED REVIEW QUESTION" : "INFERRED"}
+        </span>
         <b>PRIORITY {hypothesis.priority}</b>
         <select
           aria-label={`Status for ${hypothesis.question}`}
@@ -1351,6 +1366,11 @@ function ThreatCard({
       )}
       <h3>QUESTION</h3>
       <p>{hypothesis.question}</p>
+      {hypothesis.reasoning?.followUpQuestion && (
+        <p className="follow-up-question">
+          {hypothesis.reasoning.followUpQuestion}
+        </p>
+      )}
       <dl>
         <dt>Signal</dt>
         <dd>{hypothesis.signal}</dd>
@@ -1366,6 +1386,23 @@ function ThreatCard({
             "None"}{" "}
           / OBSERVED
         </dd>
+        {hypothesis.reasoning && (
+          <>
+            <dt>Input</dt>
+            <dd>
+              {hypothesis.reasoning.inputLocation}.
+              {hypothesis.reasoning.inputName} / OBSERVED
+            </dd>
+            <dt>Input location</dt>
+            <dd>{displayValue(hypothesis.reasoning.inputLocation)}</dd>
+            <dt>Why it was flagged</dt>
+            <dd>{hypothesis.reasoning.signalReason}</dd>
+            <dt>Review priority signal</dt>
+            <dd>{displayValue(hypothesis.reasoning.signalStrength)} signal</dd>
+            <dt>Value class</dt>
+            <dd>{hypothesis.reasoning.valueClass ?? "Not established"}</dd>
+          </>
+        )}
         <dt>Related assets</dt>
         <dd>
           {relatedAssets.map((item) => item.label).join(", ") || "None"} /
@@ -1385,6 +1422,24 @@ function ThreatCard({
         <dt>Evidence references</dt>
         <dd>{(hypothesis.evidenceIds ?? []).join(", ") || "None"}</dd>
       </dl>
+      {hypothesis.reasoning?.category === "ssrf" && (
+        <aside className="teaching-context">
+          <h3>WHY THIS MATTERS</h3>
+          <p>{hypothesis.reasoning.teachingContext}</p>
+          {!relatedBoundaries.length && (
+            <p>
+              Consider manually annotating a trust boundary if the server may
+              contact an external or internal destination.
+            </p>
+          )}
+          <h3>WHAT TO DETERMINE NEXT</h3>
+          <ol>
+            {hypothesis.reasoning.nextSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </aside>
+      )}
       <label>
         Hypothesis notes
         <textarea

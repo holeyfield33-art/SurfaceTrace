@@ -4,6 +4,92 @@ import { buildApp } from "../src/app.js";
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
+  test("records inferred SSRF reasoning without destination values and preserves manual boundaries", async () => {
+    const destination = "https://remote.example/private-image.png";
+    const har = JSON.parse(sample) as {
+      log: {
+        entries: Array<{
+          request: {
+            method: string;
+            url: string;
+            headers: Array<{ name: string; value: string }>;
+            postData?: { mimeType: string; text: string };
+          };
+        }>;
+      };
+    };
+    har.log.entries = [har.log.entries[0]!];
+    har.log.entries[0]!.request.method = "POST";
+    har.log.entries[0]!.request.url = "https://example.test/api/image/import";
+    har.log.entries[0]!.request.headers = [
+      { name: "Content-Type", value: "application/json" },
+    ];
+    har.log.entries[0]!.request.postData = {
+      mimeType: "application/json",
+      text: JSON.stringify({ imageUrl: destination }),
+    };
+    const app = buildApp({ logger: false });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/import/har",
+          payload: { har: JSON.stringify(har) },
+        })
+      ).statusCode,
+    ).toBe(200);
+    let inventory = (
+      await app.inject({ method: "GET", url: "/inventory" })
+    ).json();
+    const hypothesis = inventory.hypotheses.find(
+      (item: { reasoning?: { category?: string } }) =>
+        item.reasoning?.category === "ssrf",
+    );
+    expect(hypothesis).toMatchObject({
+      provenance: "inferred",
+      reasoning: {
+        inputName: "imageUrl",
+        inputLocation: "body-json",
+        valueClass: "absolute URL",
+      },
+    });
+    const evidence = inventory.evidence.find((item: { id: string }) =>
+      hypothesis.evidenceIds.includes(item.id),
+    );
+    expect(evidence.payload).toMatchObject({
+      endpointId: hypothesis.endpointId,
+      inputId: hypothesis.reasoning.inputId,
+      signalType: "absolute_url",
+      provenance: "inferred",
+    });
+    expect(JSON.stringify(evidence)).not.toContain(destination);
+
+    const boundaryResponse = await app.inject({
+      method: "POST",
+      url: "/trust-boundaries",
+      payload: {
+        label: "Application to Third Party",
+        type: "application_third_party",
+        sourceRef: "account-a",
+        destinationRef: hypothesis.endpointId,
+      },
+    });
+    expect(boundaryResponse.statusCode).toBe(201);
+    inventory = (await app.inject({ method: "GET", url: "/inventory" })).json();
+    expect(inventory.trustBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Application to Third Party",
+          provenance: "manual",
+        }),
+      ]),
+    );
+    expect(inventory.graph.edges).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "boundary" })]),
+    );
+    await app.close();
+  });
+
   test("allows configured local CORS origins", async () => {
     const app = buildApp({ logger: false });
     const response = await app.inject({

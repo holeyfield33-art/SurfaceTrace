@@ -151,6 +151,17 @@ export function buildGraph(input: GraphBuildInput): GraphBuildResult {
         "questions",
       ),
     );
+    if (hypothesis.reasoning?.inputId) {
+      edges.push(
+        edge(
+          `hypothesis-input-${hypothesis.id}`,
+          hypothesis.id,
+          hypothesis.reasoning.inputId,
+          "hypothesis",
+          "reviews input",
+        ),
+      );
+    }
   }
   for (const experiment of input.experiments ?? []) {
     nodes.push({

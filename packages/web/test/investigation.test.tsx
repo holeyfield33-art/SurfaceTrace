@@ -730,6 +730,99 @@ describe("investigation loop", () => {
     await user.click(screen.getByRole("button", { name: "REMOVE" }));
     await waitFor(() => expect(current.trustBoundaries).toEqual([]));
   });
+
+  test("renders an inferred SSRF review card with teaching and manual context", async () => {
+    const user = userEvent.setup();
+    const current = structuredClone(inventory);
+    current.inputs = [
+      {
+        ...input,
+        id: "input-image-url",
+        name: "imageUrl",
+        location: "body-json",
+      },
+    ];
+    current.assets = [
+      {
+        id: "asset-image",
+        label: "Imported Image",
+        category: "documents_files",
+        notes: null,
+        linkedEndpointIds: [endpoint.id],
+        linkedObservationIds: [],
+        provenance: "manual",
+      },
+    ];
+    current.trustBoundaries = [
+      {
+        id: "boundary-third-party",
+        label: "Application to Third Party",
+        type: "application_third_party",
+        notes: null,
+        sourceRef: "account-a",
+        destinationRef: endpoint.id,
+        provenance: "manual",
+      },
+    ];
+    current.hypotheses = [
+      {
+        ...hypothesis,
+        id: "hyp-ssrf",
+        question:
+          "Does body-json.imageUrl cause the application server to retrieve the supplied destination?",
+        signal: "server-side-outbound-request-review",
+        evidenceIds: ["ssrf-evidence"],
+        reasoning: {
+          category: "ssrf",
+          inputId: "input-image-url",
+          inputName: "imageUrl",
+          inputLocation: "body-json",
+          signalType: "absolute_url",
+          signalReason:
+            "body-json.imageUrl contains an absolute HTTP/HTTPS URL",
+          signalStrength: "strong",
+          valueClass: "absolute URL",
+          followUpQuestion:
+            "If server-side fetching occurs, what destinations, protocols, and trust boundaries are permitted?",
+          teachingContext:
+            "This input appears capable of describing a destination. SSRF becomes relevant only if the SERVER, rather than the browser, uses that value to make another request. You have not established that yet.",
+          nextSteps: [
+            "Does the browser fetch it or does the server?",
+            "Is a network trust boundary crossed?",
+          ],
+        },
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL) => {
+        const url = String(request);
+        if (url.endsWith("/api/import/har"))
+          return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/inventory")) return jsonResponse(current);
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    const file = new File(["{}"], "sample.har", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+    await user.upload(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      file,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "INVESTIGATION" }),
+    );
+    expect(screen.getByText("INFERRED REVIEW QUESTION")).toBeTruthy();
+    expect(screen.getByText("absolute URL")).toBeTruthy();
+    expect(
+      screen.getAllByText(/Application to Third Party/).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Imported Image/).length).toBeGreaterThan(0);
+    expect(screen.getByText("WHY THIS MATTERS")).toBeTruthy();
+    expect(screen.getByText(/You have not established that yet/)).toBeTruthy();
+    expect(screen.queryByText(/SSRF FOUND/i)).toBeNull();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {

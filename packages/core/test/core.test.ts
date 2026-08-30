@@ -496,6 +496,110 @@ describe("hypothesis engine", () => {
   );
   test("negative fixture triggers no rules", () =>
     expect(generateHypotheses([endpoint()], [input()])).toEqual([]));
+
+  test.each([
+    "url",
+    "callbackUrl",
+    "callback_url",
+    "callback-url",
+    "webhook_url",
+    "hostname",
+    "avatarURL",
+  ])("creates an SSRF review signal for semantic input %s", (name) => {
+    const hypotheses = generateHypotheses([endpoint()], [input({ name })]);
+    expect(
+      hypotheses.find((item) => item.reasoning?.category === "ssrf"),
+    ).toMatchObject({
+      provenance: "inferred",
+      reasoning: {
+        inputName: name,
+        signalType: "input_name",
+        signalStrength: "moderate",
+      },
+    });
+  });
+
+  test.each([
+    "username",
+    "userId",
+    "sourceCode",
+    "hostedPlan",
+    "targetCount",
+    "imageWidth",
+    "linkColor",
+    "domainKnowledge",
+  ])("does not create an SSRF review signal for %s", (name) => {
+    expect(
+      generateHypotheses([endpoint()], [input({ name })]).some(
+        (item) => item.reasoning?.category === "ssrf",
+      ),
+    ).toBe(false);
+  });
+
+  test.each([
+    ["query", undefined],
+    ["body-json", "application/json"],
+    ["body-form", "application/x-www-form-urlencoded"],
+  ])("detects an absolute URL in %s without retaining it", (location, mime) => {
+    const secretDestination = "https://destination.example/private";
+    const har = fixture(
+      location === "query"
+        ? `https://example.test/public?q=${encodeURIComponent(secretDestination)}`
+        : "https://example.test/public",
+    );
+    if (location === "body-json") {
+      har.log.entries[0]!.request.method = "POST";
+      har.log.entries[0]!.request.postData = {
+        mimeType: mime!,
+        text: JSON.stringify({ q: secretDestination }),
+      };
+    }
+    if (location === "body-form") {
+      har.log.entries[0]!.request.method = "POST";
+      har.log.entries[0]!.request.postData = {
+        mimeType: mime!,
+        text: `q=${encodeURIComponent(secretDestination)}`,
+      };
+    }
+    const imported = importHar(har);
+    const hypothesis = generateHypotheses(
+      imported.endpoints,
+      imported.inputs,
+      imported.observations,
+    ).find((item) => item.reasoning?.category === "ssrf");
+    expect(hypothesis?.reasoning).toMatchObject({
+      signalType: "absolute_url",
+      valueClass: "absolute URL",
+      signalStrength: "strong",
+    });
+    expect(JSON.stringify(hypothesis)).not.toContain(secretDestination);
+  });
+
+  test("keeps redirect and server-fetch questions separate", () => {
+    const hypotheses = generateHypotheses(
+      [endpoint()],
+      [input({ name: "next" })],
+    );
+    expect(
+      hypotheses.some((item) => item.reasoning?.category === "redirect"),
+    ).toBe(true);
+    expect(hypotheses.some((item) => item.reasoning?.category === "ssrf")).toBe(
+      true,
+    );
+    expect(new Set(hypotheses.map((item) => item.question)).size).toBe(
+      hypotheses.length,
+    );
+  });
+
+  test("creates both questions for an ambiguous destination callback", () => {
+    const hypotheses = generateHypotheses(
+      [endpoint()],
+      [input({ name: "callbackUrl" })],
+    );
+    expect(
+      hypotheses.map((item) => item.reasoning?.category).filter(Boolean),
+    ).toEqual(expect.arrayContaining(["ssrf", "redirect"]));
+  });
 });
 
 describe("unified request inputs", () => {
@@ -604,6 +708,19 @@ describe("threat map relationships", () => {
       imported.endpoints,
       imported.inputs,
     )[0]!;
+    hypothesis.reasoning = {
+      category: "ssrf",
+      inputId: imported.inputs[0]!.id,
+      inputName: imported.inputs[0]!.name,
+      inputLocation: imported.inputs[0]!.location,
+      signalType: "input_name",
+      signalReason: "test destination-like input",
+      signalStrength: "moderate",
+      valueClass: null,
+      followUpQuestion: null,
+      teachingContext: "Review only.",
+      nextSteps: [],
+    };
     const diff = compareObservations("experiment", observation, observation);
     const experiment: Experiment = {
       id: "experiment",
@@ -653,6 +770,7 @@ describe("threat map relationships", () => {
         `${identities[0]!.id}->${observation.endpointId}`,
         `${observation.endpointId}->${asset.id}`,
         `${hypothesis.id}->${observation.endpointId}`,
+        `${hypothesis.id}->${imported.inputs[0]!.id}`,
         `${experiment.id}->${hypothesis.id}`,
       ]),
     );
