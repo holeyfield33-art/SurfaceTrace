@@ -1,61 +1,126 @@
 # SurfaceTrace Architecture
 
-SurfaceTrace is a local-first, deterministic investigation command center with an integrated static learning layer.
+SurfaceTrace is a local-first, deterministic investigation cockpit. Core security decisions are pure TypeScript, the Fastify server owns persistence and outbound execution, and the React UI keeps passive evidence separate from active requests.
 
 ## Module Boundaries
 
 ```text
 packages/
-  core/       Pure TypeScript HAR, graph, threat, experiment, diff, evidence, and scope logic
-  server/     Bounded Fastify local API with versioned SQLite persistence
-  web/        React cockpit, static curriculum, and contextual lesson mappings
-fixtures/     Authorized, synthetic HAR data used by tests and demos
-docs/         Architecture and workflow documentation
+  core/       Pure HAR, redaction, graph, hypothesis, experiment, diff, evidence, and scope logic
+  server/     Bounded local API, server-owned SQLite, and the dedicated replay executor
+  web/        React investigation cockpit, experiment notebook, and static learning layer
+fixtures/     Authorized synthetic traffic used by tests and demonstrations
+docs/         Architecture and canonical tester workflow
 ```
 
-## Data Flow
+Only `packages/server/src/replay/httpClient.ts` performs replay network I/O. Arbitrary routes do not create their own HTTP clients.
 
-1. Import: a HAR enters the bounded local API.
-2. Redact: query secrets and sensitive request data are removed before observation creation or hashing.
-3. Normalize: requests become endpoint templates and value-free input descriptors.
-4. Map: endpoint, input, observation, and hypothesis relationships become graph data.
-5. Hypothesize: deterministic signals generate security questions, never vulnerability claims.
-6. Learn: deterministic mappings recommend static lessons for the current investigation context.
-7. Preserve: normalized import summaries enter the append-only hash-linked evidence ledger.
-8. Experiment: the tester chooses two imported observations and declares exactly one changed input.
-9. Validate: the API verifies endpoint, hypothesis, input, and observation relationships before comparison.
-10. Compare: a deterministic diff produces a `same` or `different` state and appends separate experiment and diff evidence records.
-11. Gate: the scope engine evaluates a fully specified candidate or redirect target against explicit project rules without sending traffic.
+## Investigation Pipeline
 
-## Input Model
+```text
+HAR / imported traffic
+        |
+        v
+redaction
+        |
+        v
+normalization
+        |
+        v
+observations / endpoints / inputs
+        |
+        v
+server-owned SQLite
+        |
+        v
+identity / assets / trust boundaries
+        |
+        v
+hypotheses
+        |
+        v
+experiment notebook
+        |
+        v
+request reconstruction
+        |
+        v
+scope + rate + stop gates
+        |
+        v
+human preview + explicit approval
+        |
+        v
+dedicated HTTP executor
+        |
+        v
+redacted response capture
+        |
+        v
+deep deterministic diff
+        |
+        v
+hash-linked evidence
+```
 
-Input descriptors contain a name, location, inferred type, endpoint relationship, sensitivity, and observed count. Supported locations are path, query, JSON body, form body, selected security-relevant headers, and cookies. Cookie values and sensitive values are never retained in descriptors.
+Passive comparisons stop at the experiment notebook and compare two imported observations without network activity. Active replay continues through reconstruction and all execution gates.
 
-## Invariants
+## Canonical Data
 
-- Redaction occurs before normalized storage and content hashing.
-- Raw query and cookie secrets do not enter API inventory or evidence.
-- Only HTTP and HTTPS observations are accepted.
-- HAR byte and entry limits are configurable and enforced by the API.
-- Malformed entries are skipped without discarding valid entries.
-- Local API CORS permits configured local development origins only.
-- Observations, hypotheses, experiments, evidence, and conclusions remain distinct.
-- Diffs and evidence hashes are deterministic.
-- No autonomous scanning or active request execution exists in this milestone; experiments compare imported captures only.
-- Missing or invalid scope fails closed, and every proposed redirect target is evaluated independently.
+Imported requests become redacted `Observation` records, deterministic endpoint templates, and value-free input descriptors. Supported input locations are path, query, selected headers, cookies, JSON bodies, and form bodies. Raw query secrets, cookies, credential headers, and sensitive body values do not enter canonical persistence or evidence.
+
+Identity assignments are manual. Assets and trust boundaries are manual annotations. Hypotheses and SSRF reasoning are deterministic, inferred review prompts rather than findings or vulnerability verdicts.
 
 ## State And Storage
 
-Investigation data is persisted by the server in a local, versioned SQLite database. The adapter stores only canonical redacted observations and preserves projects, imports, identity assignments, threat annotations, hypotheses, experiments, deep diffs, links, project scope, and exact append-only evidence records across restart. `SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`; supported migrations are non-destructive and unknown schema versions fail clearly. Lesson proficiency and current endpoint/lesson context continue to use local browser storage.
+SQLite is owned by the Fastify server. The persistence adapter stores canonical redacted observations together with projects, imports, endpoint/input inventories, identity assignments, threat annotations, hypotheses, experiments, deep diffs, project scope, and exact hash-linked evidence records.
 
-## Scope Boundary
+The database has an explicit schema version and supported migrations. Known versions migrate non-destructively; unknown versions fail clearly. Investigation state and evidence-chain integrity are restored and verified after server restart. Runtime replay credentials are deliberately excluded from SQLite and must be supplied again after restart.
 
-The canonical core scope engine evaluates protocol, exact host, normalized port, decoded path, method, stop-state, and rate-budget rules. Exclusions override path allowances. Redirect candidates are re-evaluated independently. Candidate bodies are not interpreted as permission for destination-like values, DNS is never resolved, and the preview API contains no network client or redirect follower.
+`SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`. Browser-only lesson proficiency and current UI context remain in local browser storage.
 
-## Learning Boundary
+## Active Replay Boundary
 
-The curriculum is a static manifest in `packages/web/src/lessons`. Recommendations map observed methods, input locations, and hypothesis signals to lessons without an LLM. The classroom is not an LMS and does not infer that a vulnerability exists.
+Replay reconstruction starts only from a known imported baseline and preserves its method, URL, safe headers, query, and body except for one mutation accepted by `assertOneVariable()`. Identity replay additionally requires runtime credential material explicitly associated with the target identity.
 
-## Future Boundaries
+Preparation performs no network activity. It canonicalizes the candidate, evaluates configured scope and stop state, checks rate availability, and returns an exact redacted preview. The preview token is single-use. On `SEND THIS REQUEST`, the server rechecks every gate, consumes rate budget only immediately before execution, deletes the token, and sends exactly one request.
 
-Active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. P8 supplies only the prerequisite decision boundary; active replay remains disabled pending separate review.
+The dedicated executor:
+
+- accepts HTTP and HTTPS only;
+- rejects malformed URLs;
+- disables automatic redirect following;
+- uses a bounded timeout;
+- enforces a bounded response-body size and records truncation;
+- performs no automatic retries.
+
+A redirect `Location` is redacted and evaluated independently through the scope engine. It is displayed only as a proposed target and cannot be followed without a new preview and approval.
+
+## Diff And Evidence
+
+Replay responses cross the existing redaction boundary before becoming observations. The existing deep-diff implementation compares status, headers, nested body fields, arrays, types, and truncation state. SurfaceTrace does not maintain a parallel replay-history subsystem: approval metadata, response observations, diffs, conclusions, and evidence attach to the existing experiment notebook model.
+
+Evidence is logically append-only and hash-linked. Replay appends distinct records for preparation, scope decision, human approval, request sent, response received, and diff creation. Persistent evidence never contains runtime credential values.
+
+## Safety Invariants
+
+1. Authorization is established before traffic enters an investigation.
+2. Missing or invalid scope produces zero outbound requests.
+3. Controlled experiments contain exactly one declared mutation.
+4. One explicit approval sends one request.
+5. Redirects require a new approval.
+6. There are no automatic retries.
+7. Rate and stop conditions fail closed.
+8. Secrets are redacted before persistence and evidence.
+9. Identity assignments and credential associations are explicit.
+10. Hypotheses and SSRF signals are not vulnerability verdicts.
+11. Conclusions remain human-controlled.
+12. Bulk replay, fuzzing, crawling, scanning, and autonomous exploitation are excluded.
+
+## Runtime Topology
+
+The web development server listens on port `5173` and proxies `/api` to Fastify on port `8787`. Docker Compose publishes both ports, mounts the workspace, keeps dependencies in a named volume, and persists SQLite data in the `surfacetrace-data` volume.
+
+## Explicit Non-Goals
+
+SurfaceTrace does not provide autonomous exploitation, internet-wide scanning, bulk fuzzing, payload libraries, cloud collection of raw sessions, AI vulnerability verdicts, automatic redirects, or retry loops.

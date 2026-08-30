@@ -142,6 +142,26 @@ interface ExperimentRecord {
   status: string;
   evidenceIds: string[];
   createdAt: string;
+  replay?: { active: boolean };
+}
+interface ReplayPreview {
+  token: string | null;
+  baseline: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: string | null;
+  };
+  preview: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: string | null;
+  };
+  changedOnly: string;
+  scopeDecision: { allowed: boolean; reason: string };
+  rateAvailable: boolean;
+  approvalRequired: boolean;
 }
 interface DiffView {
   summary: string;
@@ -778,12 +798,12 @@ function Investigation({
     observations[0];
   const ready = Boolean(
     hypothesisId &&
-      baselineId &&
-      resultId &&
-      inputId &&
-      fromValue &&
-      toValue &&
-      baselineId !== resultId,
+    baselineId &&
+    resultId &&
+    inputId &&
+    fromValue &&
+    toValue &&
+    baselineId !== resultId,
   );
 
   async function saveExperiment(): Promise<void> {
@@ -977,6 +997,12 @@ function Investigation({
               hypotheses={inventory.hypotheses}
               observations={inventory.observations}
               identities={inventory.identities}
+              onSaved={onSaved}
+            />
+            <ActiveReplay
+              observations={observations}
+              inputs={inputs}
+              hypotheses={hypotheses}
               onSaved={onSaved}
             />
             <h3>OBSERVED INPUTS</h3>
@@ -2177,6 +2203,246 @@ function ExperimentDetail({
           </li>
         ))}
       </ul>
+    </article>
+  );
+}
+
+function ActiveReplay({
+  observations,
+  inputs,
+  hypotheses,
+  onSaved,
+}: {
+  observations: Observation[];
+  inputs: Input[];
+  hypotheses: Hypothesis[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [baselineId, setBaselineId] = useState("");
+  const [inputId, setInputId] = useState("");
+  const [fromValue, setFromValue] = useState("");
+  const [toValue, setToValue] = useState("");
+  const [preview, setPreview] = useState<ReplayPreview | null>(null);
+  const [result, setResult] = useState<{
+    diff: DiffView;
+    response: {
+      status: number;
+      timingMs: number;
+      size: number;
+      truncated: boolean;
+    };
+    redirect: {
+      proposed: string;
+      followed: false;
+      approvalRequired: true;
+    } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedInput = inputs.find((item) => item.id === inputId);
+
+  function mutation() {
+    if (!selectedInput) return null;
+    const detail = { name: selectedInput.name, from: fromValue, to: toValue };
+    if (selectedInput.location === "path") return { pathParam: detail };
+    if (selectedInput.location === "query") return { queryParam: detail };
+    if (["header", "cookie"].includes(selectedInput.location))
+      return { header: detail };
+    return {
+      bodyField: { path: selectedInput.name, from: fromValue, to: toValue },
+    };
+  }
+
+  async function prepare() {
+    const changed = mutation();
+    if (!changed) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const response = await fetch("/api/replay/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baselineObservationId: baselineId,
+          hypothesisId: hypotheses[0]?.id ?? null,
+          mutation: changed,
+        }),
+      });
+      const data = (await response.json()) as ReplayPreview & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(data.error ?? `HTTP ${response.status}`);
+      setPreview(data);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel() {
+    if (!preview?.token) return;
+    await fetch(`/api/replay/${preview.token}/cancel`, { method: "POST" });
+    setPreview(null);
+  }
+
+  async function send() {
+    if (!preview?.token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/replay/${preview.token}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approval: true }),
+      });
+      const data = (await response.json()) as typeof result & {
+        error?: string;
+      };
+      if (!response.ok || !data?.diff)
+        throw new Error(data?.error ?? `HTTP ${response.status}`);
+      setResult(data);
+      setPreview(null);
+      await onSaved();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="active-replay">
+      <header>
+        <span>ACTIVE REQUEST</span>
+        <h2>Preview. Approve. Send once.</h2>
+        <p>
+          No redirect follows and no retries. Scope and rate gates are rechecked
+          at send time.
+        </p>
+      </header>
+      {!preview && !result && (
+        <div className="replay-form">
+          <ObservationSelect
+            label="Known baseline"
+            value={baselineId}
+            observations={observations}
+            onChange={setBaselineId}
+          />
+          <label>
+            One changed input
+            <select
+              value={inputId}
+              onChange={(event) => setInputId(event.target.value)}
+            >
+              <option value="">Select one input</option>
+              {inputs.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.location}: {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="value-pair">
+            <label>
+              Known value
+              <input
+                value={fromValue}
+                onChange={(event) => setFromValue(event.target.value)}
+              />
+            </label>
+            <span>TO</span>
+            <label>
+              Proposed value
+              <input
+                value={toValue}
+                onChange={(event) => setToValue(event.target.value)}
+              />
+            </label>
+          </div>
+          <button
+            className="compare-button"
+            disabled={busy || !baselineId || !inputId || !fromValue || !toValue}
+            onClick={() => void prepare()}
+          >
+            {busy ? "PREPARING..." : "PREVIEW ACTIVE REQUEST"}
+          </button>
+        </div>
+      )}
+      {preview && (
+        <div className="replay-preview">
+          <div className="replay-gates">
+            <strong>
+              {preview.scopeDecision.allowed ? "SCOPE ALLOWED" : "SCOPE DENIED"}
+            </strong>
+            <span>
+              {preview.rateAvailable ? "RATE AVAILABLE" : "RATE EXHAUSTED"}
+            </span>
+          </div>
+          <p>
+            Changed only: <code>{preview.changedOnly}</code>
+          </p>
+          <RequestPreview title="KNOWN BASELINE" request={preview.baseline} />
+          <RequestPreview title="OUTBOUND PREVIEW" request={preview.preview} />
+          <div className="replay-actions">
+            {preview.token && (
+              <button onClick={() => void cancel()}>CANCEL</button>
+            )}
+            {preview.token && (
+              <button
+                className="send-request"
+                disabled={busy}
+                onClick={() => void send()}
+              >
+                SEND THIS REQUEST
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {result && (
+        <div className="replay-result">
+          <strong>RESPONSE {result.response.status}</strong>
+          <span>
+            {result.response.timingMs} ms / {result.response.size} bytes
+            {result.response.truncated ? " / truncated" : ""}
+          </span>
+          {result.redirect && (
+            <p>
+              Redirect proposed: <code>{result.redirect.proposed}</code>. Not
+              followed; separate approval required.
+            </p>
+          )}
+          <DeepDiffView diff={result.diff} />
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+    </section>
+  );
+}
+
+function RequestPreview({
+  title,
+  request,
+}: {
+  title: string;
+  request: ReplayPreview["preview"];
+}) {
+  return (
+    <article className="request-preview">
+      <span>{title}</span>
+      <strong>
+        {request.method} {request.url}
+      </strong>
+      <pre>
+        {JSON.stringify(
+          { headers: request.headers, body: request.body },
+          null,
+          2,
+        )}
+      </pre>
     </article>
   );
 }

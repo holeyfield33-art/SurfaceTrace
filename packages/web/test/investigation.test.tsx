@@ -906,6 +906,84 @@ describe("investigation loop", () => {
     expect(await screen.findByText("OUT OF SCOPE")).toBeTruthy();
     expect(screen.getByText("HOST_NOT_ALLOWED")).toBeTruthy();
   });
+
+  test("previews an active replay before a separate one-time send approval", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(request);
+        calls.push(url);
+        if (url.endsWith("/api/scope")) return jsonResponse({ scope: null });
+        if (url.endsWith("/api/import/har"))
+          return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/inventory")) return jsonResponse(inventory);
+        if (url.endsWith("/api/replay/prepare"))
+          return jsonResponse({
+            token: "single-use-token",
+            baseline: {
+              method: "GET",
+              url: observations[0].url,
+              headers: { Cookie: "[REDACTED]" },
+              body: null,
+            },
+            preview: {
+              method: "GET",
+              url: "https://lab.example.com/api/projects/200",
+              headers: { Cookie: "[REDACTED]" },
+              body: null,
+            },
+            changedOnly: "path id: 100 -> 200",
+            scopeDecision: { allowed: true, reason: "in scope" },
+            rateAvailable: true,
+            approvalRequired: true,
+          });
+        if (url.endsWith("/api/replay/single-use-token/send")) {
+          expect(JSON.parse(String(init?.body))).toEqual({ approval: true });
+          return jsonResponse({
+            response: { status: 200, timingMs: 12, size: 42, truncated: false },
+            redirect: null,
+            diff: {
+              summary: "Body field changed",
+              bodyComparison: "different",
+            },
+          });
+        }
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    const fileInput =
+      document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = new File(["{}"], "sample.har", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+    await user.upload(fileInput, file);
+    await user.click(
+      await screen.findByRole("button", { name: "INVESTIGATION" }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Known baseline"),
+      "obs-100",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("One changed input"),
+      "input-id",
+    );
+    await user.type(screen.getByLabelText("Known value"), "100");
+    await user.type(screen.getByLabelText("Proposed value"), "200");
+    await user.click(
+      screen.getByRole("button", { name: "PREVIEW ACTIVE REQUEST" }),
+    );
+    expect(await screen.findByText("SCOPE ALLOWED")).toBeTruthy();
+    expect(screen.getAllByText(/\[REDACTED\]/).length).toBeGreaterThan(0);
+    expect(calls.filter((url) => url.includes("/send"))).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "SEND THIS REQUEST" }));
+    await waitFor(() =>
+      expect(calls.filter((url) => url.includes("/send"))).toHaveLength(1),
+    );
+    expect(await screen.findByText("RESPONSE 200")).toBeTruthy();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {

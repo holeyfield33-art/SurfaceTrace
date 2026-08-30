@@ -189,7 +189,11 @@ export class SqlitePersistence {
     };
   }
 
-  save(state: PersistedState, newImport = false): void {
+  save(
+    state: PersistedState,
+    newImport = false,
+    activeImportChanged = false,
+  ): void {
     this.db.transaction(() => {
       this.db
         .prepare("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?")
@@ -210,9 +214,23 @@ export class SqlitePersistence {
             item.skippedEntryCount,
             item.sourceLabel,
           );
-        this.writeImportEntities("observations", item.id, state.observations);
-        this.writeImportEntities("endpoints", item.id, state.endpoints);
-        this.writeImportEntities("inputs", item.id, state.inputs);
+      }
+      if (state.activeImport && (newImport || activeImportChanged)) {
+        for (const table of ["observations", "endpoints", "inputs"])
+          this.db
+            .prepare(`DELETE FROM ${table} WHERE import_id = ?`)
+            .run(state.activeImport.id);
+        this.writeImportEntities(
+          "observations",
+          state.activeImport.id,
+          state.observations,
+        );
+        this.writeImportEntities(
+          "endpoints",
+          state.activeImport.id,
+          state.endpoints,
+        );
+        this.writeImportEntities("inputs", state.activeImport.id, state.inputs);
       }
       for (const table of ENTITY_TABLES)
         this.db

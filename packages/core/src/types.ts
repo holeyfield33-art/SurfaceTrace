@@ -118,6 +118,7 @@ export interface ScopeStopConditions {
   maxRequestCount: number | null;
   requestCount: number;
   repeatedServerErrors: boolean;
+  serverErrorCount?: number;
   authenticationLost: boolean;
   customNote: string | null;
 }
@@ -310,6 +311,19 @@ export interface Experiment {
   evidenceIds: string[];
   createdAt: string;
   updatedAt: string;
+  replay?: {
+    active: true;
+    outboundUrl: string;
+    outboundMethod: string;
+    requestPreview: string;
+    scopeDecision: ScopeDecision;
+    approvedAt: string;
+    responseTimingMs: number;
+    responseSize: number;
+    responseTruncated: boolean;
+    redirectLocation: string | null;
+    redirectDecision: ScopeDecision | null;
+  };
 }
 
 export interface DiffCard {

@@ -7,6 +7,7 @@ import {
   assertOneVariable,
   buildGraph,
   compareObservations,
+  bodyShape,
   describeMutation,
   generateHypotheses,
   hashPayload,
@@ -15,7 +16,15 @@ import {
   evaluateRedirectTarget,
   parseHarJson,
   redactBody,
+  redactHeaders,
+  sanitizeUrl,
 } from "@surfacetrace/core";
+import {
+  reconstructRequest,
+  type ReconstructedRequest,
+  type RuntimeCredential,
+} from "./replay/reconstruct.js";
+import { executeReplayRequest } from "./replay/httpClient.js";
 import type {
   Asset,
   AssetCategory,
@@ -97,6 +106,8 @@ export interface AppOptions {
   allowedOrigins?: string[];
   logger?: boolean;
   dbPath?: string;
+  replayTimeoutMs?: number;
+  maxReplayResponseBytes?: number;
 }
 
 function defaultIdentities(): IdentityContext[] {
@@ -171,6 +182,20 @@ export function buildApp(options: AppOptions = {}) {
       projectScope.id,
       projectScope.rateWindowTimestamps ?? [],
     );
+  const runtimeCredentials = new Map<string, RuntimeCredential>();
+  const preparedReplays = new Map<
+    string,
+    {
+      baseline: Observation;
+      request: ReconstructedRequest;
+      mutation: ExperimentMutation;
+      hypothesisId: string | null;
+      preparedAt: string;
+      evidenceIds: string[];
+    }
+  >();
+  const forcePersistRequests = new WeakSet<object>();
+  const changedImportRequests = new WeakSet<object>();
   let experiments: Experiment[] = restored?.experiments ?? [];
   let assets: Asset[] = restored?.assets ?? [];
   let trustBoundaries: TrustBoundary[] = restored?.trustBoundaries ?? [];
@@ -258,10 +283,17 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.addHook("onSend", async (request, reply, payload) => {
     const snapshot = requestSnapshots.get(request);
-    if (snapshot && reply.statusCode < 400) {
+    if (
+      snapshot &&
+      (reply.statusCode < 400 || forcePersistRequests.has(request))
+    ) {
       try {
         activeProject.updatedAt = new Date().toISOString();
-        persistence.save(state(), newImportRequests.has(request));
+        persistence.save(
+          state(),
+          newImportRequests.has(request),
+          changedImportRequests.has(request),
+        );
       } catch (error) {
         restoreState(snapshot);
         throw error;
@@ -582,6 +614,378 @@ export function buildApp(options: AppOptions = {}) {
     return {
       consumed: true,
       requestCount: projectScope.stopConditions.requestCount,
+    };
+  });
+  app.put<{
+    Params: { identityId: string };
+    Body: RuntimeCredential;
+  }>("/replay/credentials/:identityId", async (request, reply) => {
+    const identity = identities.find(
+      (item) => item.id === request.params.identityId,
+    );
+    if (!identity)
+      return reply.status(404).send({ error: "Identity not found" });
+    const headers = request.body?.headers ?? {};
+    const cookies = request.body?.cookies ?? {};
+    if (!Object.keys(headers).length && !Object.keys(cookies).length)
+      return reply
+        .status(400)
+        .send({ error: "Explicit runtime credential material is required" });
+    runtimeCredentials.set(identity.id, {
+      headers: structuredClone(headers),
+      cookies: structuredClone(cookies),
+    });
+    return {
+      identityId: identity.id,
+      available: true,
+      headerNames: Object.keys(headers),
+      cookieNames: Object.keys(cookies),
+      persisted: false,
+    };
+  });
+  app.post<{
+    Body: {
+      baselineObservationId: string;
+      hypothesisId?: string | null;
+      mutation: ExperimentMutation;
+      targetIdentityId?: string | null;
+    };
+  }>("/replay/prepare", async (request, reply) => {
+    if (!lastImport)
+      return reply.status(409).send({ error: "Import a HAR before replay" });
+    const baseline = lastImport.observations.find(
+      (item) => item.id === request.body?.baselineObservationId,
+    );
+    if (!baseline)
+      return reply
+        .status(404)
+        .send({ error: "Baseline observation not found" });
+    if (
+      request.body.hypothesisId &&
+      !lastHypotheses?.some(
+        (item) =>
+          item.id === request.body.hypothesisId &&
+          item.endpointId === baseline.endpointId,
+      )
+    )
+      return reply
+        .status(400)
+        .send({ error: "Hypothesis does not belong to the baseline endpoint" });
+    let reconstructed: ReconstructedRequest;
+    try {
+      reconstructed = reconstructRequest(
+        baseline,
+        request.body.mutation,
+        identities,
+        runtimeCredentials,
+        request.body.targetIdentityId,
+      );
+    } catch (error) {
+      return reply.status(400).send({
+        error: error instanceof Error ? error.message : String(error),
+        networkRequests: 0,
+      });
+    }
+    const scopeDecision = isRequestInScope(
+      {
+        method: reconstructed.method,
+        url: reconstructed.url,
+        body: reconstructed.body,
+      },
+      projectScope,
+      {
+        rateAvailable: projectScope
+          ? requestBudget.canConsumeRequest(projectScope)
+          : false,
+      },
+    );
+    const preparedAt = new Date().toISOString();
+    const preparedEvidence = ledger.append("note", {
+      event: "replay_prepared",
+      baselineObservationId: baseline.id,
+      mutationDescription: reconstructed.mutationDescription,
+      preparedAt,
+    });
+    const scopeEvidence = ledger.append("scope", {
+      event: "replay_scope_decision",
+      baselineObservationId: baseline.id,
+      decision: scopeDecision,
+    });
+    if (!scopeDecision.allowed)
+      return {
+        token: null,
+        baseline: reconstructed.baselinePreview,
+        changedOnly: reconstructed.mutationDescription,
+        preview: reconstructed.preview,
+        scopeDecision,
+        rateAvailable: scopeDecision.reasonCode !== "RATE_LIMIT_EXHAUSTED",
+        approvalRequired: false,
+        networkRequests: 0,
+      };
+    const token = crypto.randomUUID();
+    preparedReplays.set(token, {
+      baseline,
+      request: reconstructed,
+      mutation: structuredClone(request.body.mutation),
+      hypothesisId: request.body.hypothesisId ?? null,
+      preparedAt,
+      evidenceIds: [preparedEvidence.id, scopeEvidence.id],
+    });
+    return {
+      token,
+      baseline: reconstructed.baselinePreview,
+      changedOnly: reconstructed.mutationDescription,
+      preview: reconstructed.preview,
+      scopeDecision,
+      rateAvailable: true,
+      approvalRequired: true,
+      networkRequests: 0,
+    };
+  });
+  app.post<{ Params: { token: string } }>(
+    "/replay/:token/cancel",
+    async (request, reply) => {
+      if (!preparedReplays.delete(request.params.token))
+        return reply.status(404).send({ error: "Replay preview not found" });
+      return { cancelled: true, networkRequests: 0 };
+    },
+  );
+  app.post<{
+    Params: { token: string };
+    Body: { approval?: boolean };
+  }>("/replay/:token/send", async (request, reply) => {
+    if (request.body?.approval !== true)
+      return reply.status(400).send({
+        error: "Explicit approval is required",
+        networkRequests: 0,
+      });
+    const prepared = preparedReplays.get(request.params.token);
+    if (!prepared)
+      return reply.status(404).send({
+        error: "Replay preview not found or already used",
+        networkRequests: 0,
+      });
+    preparedReplays.delete(request.params.token);
+    if (Date.now() - Date.parse(prepared.preparedAt) > 10 * 60_000)
+      return reply.status(410).send({
+        error: "Replay preview expired",
+        networkRequests: 0,
+      });
+    const scopeDecision = isRequestInScope(
+      {
+        method: prepared.request.method,
+        url: prepared.request.url,
+        body: prepared.request.body,
+      },
+      projectScope,
+      {
+        rateAvailable: projectScope
+          ? requestBudget.canConsumeRequest(projectScope)
+          : false,
+      },
+    );
+    if (!scopeDecision.allowed)
+      return reply.status(403).send({
+        error: scopeDecision.reason,
+        decision: scopeDecision,
+        networkRequests: 0,
+      });
+    if (!projectScope || !requestBudget.consumeRequest(projectScope))
+      return reply.status(429).send({
+        error: "Project request budget is exhausted",
+        networkRequests: 0,
+      });
+    const approvedAt = new Date().toISOString();
+    projectScope.stopConditions.requestCount += 1;
+    projectScope.rateWindowTimestamps = requestBudget.snapshot(projectScope.id);
+    projectScope.updatedAt = approvedAt;
+    forcePersistRequests.add(request);
+    const approvalEvidence = ledger.append("note", {
+      event: "replay_human_approval",
+      baselineObservationId: prepared.baseline.id,
+      approvedAt,
+    });
+    const sentEvidence = ledger.append("experiment", {
+      event: "replay_request_sent",
+      baselineObservationId: prepared.baseline.id,
+      method: prepared.request.method,
+      url: sanitizeUrl(prepared.request.url),
+      approvedAt,
+    });
+    let replayResponse;
+    try {
+      replayResponse = await executeReplayRequest(prepared.request, {
+        timeoutMs: options.replayTimeoutMs ?? 10_000,
+        maxResponseBytes: options.maxReplayResponseBytes ?? 1_048_576,
+      });
+    } catch (error) {
+      ledger.append("note", {
+        event: "replay_failed",
+        baselineObservationId: prepared.baseline.id,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return reply.status(502).send({
+        error: error instanceof Error ? error.message : String(error),
+        networkRequests: 1,
+        retries: 0,
+      });
+    }
+    const safeUrl = sanitizeUrl(prepared.request.url);
+    const safeRequestHeaders = redactHeaders(prepared.request.headers);
+    const safeRequestBody = redactBody(
+      prepared.request.body,
+      safeRequestHeaders["content-type"] ??
+        safeRequestHeaders["Content-Type"] ??
+        "",
+    );
+    const responsePayload = {
+      baselineObservationId: prepared.baseline.id,
+      status: replayResponse.status,
+      size: replayResponse.size,
+      timingMs: replayResponse.timingMs,
+      truncated: replayResponse.truncated,
+      redirectLocation: replayResponse.redirectLocation,
+    };
+    const responseEvidence = ledger.append("observation", {
+      event: "replay_response_received",
+      ...responsePayload,
+    });
+    const capturedAt = new Date().toISOString();
+    const observationPayload = {
+      endpointId: prepared.baseline.endpointId,
+      method: prepared.request.method,
+      url: safeUrl,
+      requestHeaders: safeRequestHeaders,
+      requestBodyShape: bodyShape(safeRequestBody),
+      responseStatus: replayResponse.status,
+      responseHeaders: replayResponse.headers,
+      responseBodyShape: bodyShape(replayResponse.body),
+      responseSize: replayResponse.size,
+      capturedAt,
+    };
+    const resultObservation: Observation = {
+      id: hashPayload(observationPayload).slice(0, 24),
+      ...observationPayload,
+      pathTemplate: prepared.baseline.pathTemplate,
+      redacted: true,
+      contentHash: hashPayload(observationPayload),
+      http: {
+        request: {
+          httpVersion: "HTTP/1.1",
+          target: `${new URL(safeUrl).pathname}${new URL(safeUrl).search}`,
+          headers: safeRequestHeaders,
+          cookies: {},
+          query: Object.fromEntries(new URL(safeUrl).searchParams.entries()),
+          body: safeRequestBody,
+        },
+        response: {
+          httpVersion: "HTTP/1.1",
+          status: replayResponse.status,
+          statusText: replayResponse.statusText,
+          headers: replayResponse.headers,
+          body: replayResponse.body,
+        },
+      },
+      parsedInputs: prepared.baseline.parsedInputs,
+      identityId: prepared.request.targetIdentityId,
+    };
+    lastImport!.observations.push(resultObservation);
+    changedImportRequests.add(request);
+    const endpoint = lastImport!.endpoints.find(
+      (item) => item.id === prepared.baseline.endpointId,
+    );
+    if (endpoint) {
+      endpoint.observationCount += 1;
+      endpoint.lastSeen = capturedAt;
+      if (!endpoint.statusCodes.includes(replayResponse.status))
+        endpoint.statusCodes.push(replayResponse.status);
+    }
+    const experimentId = hashPayload({
+      baseline: prepared.baseline.id,
+      result: resultObservation.id,
+      approvedAt,
+    }).slice(0, 20);
+    const diff = compareObservations(
+      experimentId,
+      prepared.baseline,
+      resultObservation,
+    );
+    const redirectDecision = replayResponse.redirectLocation
+      ? evaluateRedirectTarget(
+          prepared.request.method,
+          replayResponse.redirectLocation,
+          projectScope,
+          {
+            rateAvailable: requestBudget.canConsumeRequest(projectScope),
+          },
+        )
+      : null;
+    const diffEvidence = ledger.append("diff", {
+      event: "replay_diff_created",
+      diff,
+    });
+    const experiment: Experiment = {
+      id: experimentId,
+      endpointId: prepared.baseline.endpointId,
+      baselineObservationId: prepared.baseline.id,
+      resultObservationId: resultObservation.id,
+      hypothesisId: prepared.hypothesisId,
+      mutation: redactMutation(prepared.mutation),
+      mutationDescription: prepared.request.mutationDescription,
+      comparisonClassification: "controlled",
+      requestDifferences: [],
+      diff,
+      baselineIdentityId: prepared.baseline.identityId,
+      resultIdentityId: prepared.request.targetIdentityId,
+      status: diff.bodyComparison === "identical" ? "same" : "different",
+      conclusion: null,
+      notes: null,
+      evidenceIds: [
+        ...prepared.evidenceIds,
+        approvalEvidence.id,
+        sentEvidence.id,
+        responseEvidence.id,
+        diffEvidence.id,
+      ],
+      createdAt: approvedAt,
+      updatedAt: capturedAt,
+      replay: {
+        active: true,
+        outboundUrl: safeUrl,
+        outboundMethod: prepared.request.method,
+        requestPreview: prepared.request.preview,
+        scopeDecision,
+        approvedAt,
+        responseTimingMs: replayResponse.timingMs,
+        responseSize: replayResponse.size,
+        responseTruncated: replayResponse.truncated,
+        redirectLocation: replayResponse.redirectLocation,
+        redirectDecision,
+      },
+    };
+    experiments.push(experiment);
+    if (replayResponse.status >= 500 && projectScope) {
+      const count = (projectScope.stopConditions.serverErrorCount ?? 0) + 1;
+      projectScope.stopConditions.serverErrorCount = count;
+      if (count >= 3) projectScope.stopConditions.repeatedServerErrors = true;
+    }
+    refreshGraph();
+    return {
+      experiment,
+      observation: resultObservation,
+      response: replayResponse,
+      diff,
+      redirect: replayResponse.redirectLocation
+        ? {
+            proposed: replayResponse.redirectLocation,
+            decision: redirectDecision,
+            followed: false,
+            approvalRequired: true,
+          }
+        : null,
+      networkRequests: 1,
+      retries: 0,
+      ledgerValid: ledger.verify(),
     };
   });
   app.get("/inventory", async (_request, reply) => {
