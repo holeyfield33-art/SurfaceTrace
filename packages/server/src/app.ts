@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import {
   EvidenceLedger,
   RequestBudget,
@@ -115,6 +116,26 @@ export interface AppOptions {
   dbPath?: string;
   replayTimeoutMs?: number;
   maxReplayResponseBytes?: number;
+  apiToken?: string;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  const normalized = address.toLowerCase().split("%")[0];
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "::ffff:127.0.0.1"
+  );
+}
+
+function tokenMatches(
+  header: string | undefined,
+  expected: string | undefined,
+): boolean {
+  if (!expected || !header?.startsWith("Bearer ")) return false;
+  const supplied = Buffer.from(header.slice(7), "utf8");
+  const configured = Buffer.from(expected, "utf8");
+  return supplied.length === configured.length && timingSafeEqual(supplied, configured);
 }
 
 function defaultIdentities(): IdentityContext[] {
@@ -170,6 +191,9 @@ export function buildApp(options: AppOptions = {}) {
     logger: options.logger ?? true,
     bodyLimit: maxBodyBytes,
   });
+  const apiToken = options.apiToken ?? process.env.SURFACETRACE_API_TOKEN;
+  if (apiToken && apiToken.length < 32)
+    throw new Error("SURFACETRACE_API_TOKEN must be at least 32 characters");
   const persistence = new SqlitePersistence(
     options.dbPath ??
       (process.env.NODE_ENV === "test"
@@ -284,7 +308,15 @@ export function buildApp(options: AppOptions = {}) {
   }
   refreshGraph();
 
-  app.addHook("onRequest", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
+    if (
+      !isLoopbackAddress(request.ip) &&
+      !tokenMatches(request.headers.authorization, apiToken)
+    ) {
+      return reply.status(401).send({
+        error: "Non-loopback API access requires a valid bearer token",
+      });
+    }
     if (["POST", "PATCH", "DELETE"].includes(request.method))
       requestSnapshots.set(request, structuredClone(state()));
   });

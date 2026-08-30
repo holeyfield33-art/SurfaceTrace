@@ -270,11 +270,12 @@ describe("evidence ledger", () => {
     return value;
   };
   test("valid chain", () => expect(ledger().verify()).toBe(true));
-  test.each(["payload", "createdAt", "prevHash"])(
+  test.each(["id", "payload", "createdAt", "prevHash"])(
     "detects %s mutation",
     (field) => {
       const value = ledger();
       const record = value.all()[1]!;
+      if (field === "id") record.id = "changed";
       if (field === "payload") record.payload = { changed: true };
       if (field === "createdAt") record.createdAt = "2000-01-01T00:00:00.000Z";
       if (field === "prevHash") record.prevHash = "changed";

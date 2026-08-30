@@ -49,6 +49,7 @@ export class EvidenceLedger {
         createdAt: r.createdAt,
       });
       if (recomputed !== r.contentHash) return false;
+      if (r.id !== r.contentHash.slice(0, 24)) return false;
       expectedPrev = r.contentHash;
     }
     return true;

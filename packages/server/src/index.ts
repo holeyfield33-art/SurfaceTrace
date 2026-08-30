@@ -1,5 +1,14 @@
 import { buildApp } from "./app.js";
 
+const port = Number(process.env.PORT ?? 8787);
+const host = process.env.HOST ?? "127.0.0.1";
+const loopbackHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+if (!loopbackHosts.has(host) && !process.env.SURFACETRACE_API_TOKEN) {
+  throw new Error(
+    "Non-loopback HOST requires SURFACETRACE_API_TOKEN with at least 32 characters",
+  );
+}
+
 const app = buildApp({
   maxBodyBytes: Number(process.env.MAX_HAR_BODY_BYTES ?? 10 * 1024 * 1024),
   maxHarEntries: Number(process.env.MAX_HAR_ENTRIES ?? 5000),
@@ -8,9 +17,6 @@ const app = buildApp({
     .map((origin) => origin.trim())
     .filter(Boolean),
 });
-
-const port = Number(process.env.PORT ?? 8787);
-const host = process.env.HOST ?? "127.0.0.1";
 
 try {
   await app.listen({ port, host });

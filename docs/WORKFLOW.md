@@ -129,3 +129,7 @@ These signals do not establish SSRF. SurfaceTrace does not automatically probe d
 - SurfaceTrace: organize investigation context, threat mapping, controlled replay, deterministic comparison, conclusions, and evidence.
 
 SurfaceTrace is not positioned as a Burp Suite or Caido replacement.
+
+## Three-Agent Security Teams
+
+Use `npm run team:pentest` for boundary-focused verification or `npm run team:redteam` for adversarial assumption review. Both commands create three independent, scoped prompt packets under ignored `security-runs/`; they do not invoke a model or send traffic. Active mode is restricted to an explicit loopback target. After the three receipts are saved, `npm run team:gate -- <run-dir>` applies the deterministic PASS/BLOCK/FREEZE gate described in `security-teams/README.md`.

@@ -6,6 +6,28 @@ import { buildApp } from "../src/app.js";
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
+  test("requires a strong bearer token outside loopback", async () => {
+    expect(() => buildApp({ logger: false, apiToken: "too-short" })).toThrow(
+      "at least 32 characters",
+    );
+    const apiToken = "a-secure-test-token-with-32-characters";
+    const app = buildApp({ logger: false, apiToken });
+    const denied = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+    });
+    expect(denied.statusCode).toBe(401);
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+      headers: { authorization: `Bearer ${apiToken}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+    await app.close();
+  });
+
   test("persists scope lifecycle and previews candidates without network activity", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-scope-"));
     const dbPath = join(directory, "scope.db");

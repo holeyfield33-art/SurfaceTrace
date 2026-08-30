@@ -119,7 +119,9 @@ Evidence is logically append-only and hash-linked. Replay appends distinct recor
 
 ## Runtime Topology
 
-The web development server listens on port `5173` and proxies `/api` to Fastify on port `8787`. Docker Compose publishes both ports, mounts the workspace, keeps dependencies in a named volume, and persists SQLite data in the `surfacetrace-data` volume.
+The web development server listens on port `5173` and proxies `/api` to Fastify on port `8787`. SurfaceTrace is explicitly a single-user local workspace, not a multi-tenant service. Fastify binds to loopback by default. Docker Compose keeps Fastify on container loopback and publishes only the web proxy on host loopback, while mounting the workspace, keeping dependencies in a named volume, and persisting SQLite data in the `surfacetrace-data` volume.
+
+An intentional non-loopback API bind requires an operator-supplied `SURFACETRACE_API_TOKEN` of at least 32 characters. Non-loopback requests must present that token as a bearer credential. This protects accidental remote exposure; it does not turn the globally active project model into a multi-user authorization architecture. Projects, observations, identities, and evidence share one local operator boundary.
 
 ## Explicit Non-Goals
 

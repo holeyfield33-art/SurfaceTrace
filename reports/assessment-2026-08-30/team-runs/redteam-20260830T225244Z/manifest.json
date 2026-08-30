@@ -1,0 +1,14 @@
+{
+  "run_id": "redteam-20260830T225244Z",
+  "team": "redteam",
+  "target": ".",
+  "mode": "passive",
+  "authorization": "SurfaceTrace workspace owner review 2026-08-30",
+  "scope_sha256": "284df67983aed6b55cc73ae5d4f4d9c30da88539d6f6b1953857bc650e3556b3",
+  "agents": [
+    "abuse-case-analyst",
+    "agentic-threat-analyst",
+    "defense-evasion-analyst"
+  ],
+  "created_at": "2026-08-30T22:52:44.336Z"
+}

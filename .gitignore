@@ -38,6 +38,7 @@ Thumbs.db
 # Test / coverage
 coverage/
 .nyc_output/
+tmp/
 
 # Local data
 data/
@@ -49,3 +50,4 @@ data/
 # Evidence & redacted artifacts (keep out of git by default)
 evidence/
 redacted/
+security-runs/
