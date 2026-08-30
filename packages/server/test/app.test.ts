@@ -1,9 +1,210 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
+  test("creates a versioned local database and default project", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));
+    const dbPath = join(directory, "surfacetrace.db");
+    try {
+      const app = buildApp({ logger: false, dbPath });
+      expect(
+        (await app.inject({ method: "GET", url: "/health" })).json(),
+      ).toMatchObject({
+        schemaVersion: 1,
+        ledgerValid: true,
+      });
+      const projects = (
+        await app.inject({ method: "GET", url: "/projects" })
+      ).json();
+      expect(projects.projects).toEqual([
+        expect.objectContaining({ name: "Untitled Investigation" }),
+      ]);
+      const created = await app.inject({
+        method: "POST",
+        url: "/projects",
+        payload: { name: "Persistence Review" },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json().name).toBe("Persistence Review");
+      await app.close();
+      expect(readFileSync(dbPath).subarray(0, 16).toString()).toBe(
+        "SQLite format 3\u0000",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("fails clearly for an invalid database path", () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-invalid-"));
+    try {
+      expect(() => buildApp({ logger: false, dbPath: directory })).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("restores a complete investigation and exact evidence chain after restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-restart-"));
+    const dbPath = join(directory, "surfacetrace.db");
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    try {
+      first = buildApp({ logger: false, dbPath });
+      const imported = await first.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: sample, sourceLabel: "sample.har" },
+      });
+      expect(imported.statusCode).toBe(200);
+      let inventory = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      const endpoint = inventory.endpoints.find(
+        (item: { pathTemplate: string }) =>
+          item.pathTemplate === "/api/projects/{id}",
+      );
+      const observations = inventory.observations.filter(
+        (item: { endpointId: string }) => item.endpointId === endpoint.id,
+      );
+      const input = inventory.inputs.find(
+        (item: { endpointId: string; location: string }) =>
+          item.endpointId === endpoint.id && item.location === "path",
+      );
+      const hypothesis = inventory.hypotheses.find(
+        (item: { endpointId: string }) => item.endpointId === endpoint.id,
+      );
+      await first.inject({
+        method: "PATCH",
+        url: `/observations/${observations[0].id}/identity`,
+        payload: { identityId: "account-a" },
+      });
+      const asset = (
+        await first.inject({
+          method: "POST",
+          url: "/assets",
+          payload: {
+            label: "Project Data",
+            category: "account_data",
+            linkedEndpointIds: [endpoint.id],
+            linkedObservationIds: [observations[0].id],
+          },
+        })
+      ).json();
+      const boundary = (
+        await first.inject({
+          method: "POST",
+          url: "/trust-boundaries",
+          payload: {
+            label: "Application to Internal Service",
+            type: "application_internal_service",
+            sourceRef: "account-a",
+            destinationRef: endpoint.id,
+          },
+        })
+      ).json();
+      const experiment = (
+        await first.inject({
+          method: "POST",
+          url: "/experiments",
+          payload: {
+            endpointId: endpoint.id,
+            hypothesisId: hypothesis.id,
+            inputId: input.id,
+            baselineObservationId: observations[0].id,
+            resultObservationId: observations[1].id,
+            mutation: {
+              pathParam: { name: input.name, from: "100", to: "200" },
+            },
+          },
+        })
+      ).json().experiment;
+      await first.inject({
+        method: "PATCH",
+        url: `/experiments/${experiment.id}`,
+        payload: {
+          conclusion: "needs_more_testing",
+          notes: "Restart persistence review",
+        },
+      });
+      inventory = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      await first.inject({
+        method: "PATCH",
+        url: `/hypotheses/${hypothesis.id}`,
+        payload: {
+          status: "investigating",
+          observationIds: [observations[0].id],
+          experimentIds: [experiment.id],
+          assetIds: [asset.id],
+          trustBoundaryIds: [boundary.id],
+          evidenceIds: [inventory.evidence[0].id],
+          notes: "Persist linked context",
+        },
+      });
+      const before = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      const evidenceBefore = (
+        await first.inject({ method: "GET", url: "/evidence" })
+      ).json();
+      const projects = (
+        await first.inject({ method: "GET", url: "/projects" })
+      ).json();
+      const imports = (
+        await first.inject({
+          method: "GET",
+          url: `/projects/${projects.activeProjectId}/imports`,
+        })
+      ).json();
+      expect(imports.imports).toEqual([
+        expect.objectContaining({ sourceLabel: "sample.har" }),
+      ]);
+      await first.close();
+      first = null;
+
+      second = buildApp({ logger: false, dbPath });
+      const after = (
+        await second.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      const evidenceAfter = (
+        await second.inject({ method: "GET", url: "/evidence" })
+      ).json();
+      expect(after.observations).toEqual(before.observations);
+      expect(after.endpoints).toEqual(before.endpoints);
+      expect(after.inputs).toEqual(before.inputs);
+      expect(after.identities).toEqual(before.identities);
+      expect(after.assets).toEqual(before.assets);
+      expect(after.trustBoundaries).toEqual(before.trustBoundaries);
+      expect(after.hypotheses).toEqual(before.hypotheses);
+      expect(after.experiments).toEqual(before.experiments);
+      expect(after.experiments[0].diff).toEqual(before.experiments[0].diff);
+      expect(evidenceAfter).toEqual(evidenceBefore);
+      expect(evidenceAfter.valid).toBe(true);
+      expect(evidenceAfter.tip).toBe(evidenceBefore.tip);
+      await second.close();
+      second = null;
+
+      const databaseText = readFileSync(dbPath).toString("utf8");
+      for (const secret of [
+        "secret-token-do-not-store",
+        "fixture-cookie-secret-do-not-store",
+        "should-be-redacted",
+        "token=abc",
+      ])
+        expect(databaseText).not.toContain(secret);
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("records inferred SSRF reasoning without destination values and preserves manual boundaries", async () => {
     const destination = "https://remote.example/private-image.png";
     const har = JSON.parse(sample) as {

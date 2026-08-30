@@ -44,7 +44,7 @@ Input descriptors contain a name, location, inferred type, endpoint relationship
 
 ## State And Storage
 
-Investigation data is held in memory. Lesson proficiency and the current endpoint/lesson context use local browser storage so users can switch between investigating and learning without losing focus. SQLite persistence is planned but not implemented.
+Investigation data is persisted by the server in a local, versioned SQLite database. The adapter stores only canonical redacted observations and preserves projects, imports, identity assignments, threat annotations, hypotheses, experiments, deep diffs, links, and exact append-only evidence records across restart. `SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`; schema mismatches fail without destructive recreation. Lesson proficiency and current endpoint/lesson context continue to use local browser storage.
 
 ## Learning Boundary
 
@@ -52,4 +52,4 @@ The curriculum is a static manifest in `packages/web/src/lessons`. Recommendatio
 
 ## Future Boundaries
 
-SQLite persistence, active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. Scope, authorization, rate controls, and stop conditions must be implemented before active execution is enabled.
+Active controlled request execution, a full pan/zoom graph canvas, remaining lesson prose, and evidence export remain planned work. Scope, authorization, rate controls, and stop conditions must be implemented before active execution is enabled.

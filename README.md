@@ -63,6 +63,10 @@ docker compose exec surfacetrace npm run dev
 docker compose exec surfacetrace npm run dev:web
 ```
 
+Server state is stored at `./data/surfacetrace.db` by default. Override it with
+`SURFACETRACE_DB_PATH`; Docker Compose mounts the `surfacetrace-data` volume at
+the configured path.
+
 The API is available at `http://localhost:8787` and the web UI at
 `http://localhost:5173`. VS Code can also open the same service through the
 included Dev Container configuration.

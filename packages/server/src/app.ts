@@ -27,6 +27,11 @@ import type {
   TrustBoundary,
   TrustBoundaryType,
 } from "@surfacetrace/core";
+import {
+  SqlitePersistence,
+  type ImportRecord,
+  type PersistedState,
+} from "./persistence.js";
 
 const EXPERIMENT_STATUSES = new Set<ExperimentStatus>([
   "open",
@@ -77,29 +82,11 @@ export interface AppOptions {
   maxHarEntries?: number;
   allowedOrigins?: string[];
   logger?: boolean;
+  dbPath?: string;
 }
 
-export function buildApp(options: AppOptions = {}) {
-  const maxBodyBytes = options.maxBodyBytes ?? 10 * 1024 * 1024;
-  const maxHarEntries = options.maxHarEntries ?? 5000;
-  const allowedOrigins = new Set(
-    options.allowedOrigins ?? [
-      "http://127.0.0.1:5173",
-      "http://localhost:5173",
-    ],
-  );
-  const app = Fastify({
-    logger: options.logger ?? true,
-    bodyLimit: maxBodyBytes,
-  });
-  const ledger = new EvidenceLedger();
-  const experiments: Experiment[] = [];
-  const assets: Asset[] = [];
-  const trustBoundaries: TrustBoundary[] = [];
-  let lastImport: ReturnType<typeof importHar> | null = null;
-  let lastGraph: ReturnType<typeof buildGraph> | null = null;
-  let lastHypotheses: ReturnType<typeof generateHypotheses> | null = null;
-  const identities: IdentityContext[] = [
+function defaultIdentities(): IdentityContext[] {
+  return [
     {
       id: "anonymous",
       label: "Anonymous",
@@ -136,6 +123,93 @@ export function buildApp(options: AppOptions = {}) {
       associatedObservationIds: [],
     },
   ];
+}
+
+export function buildApp(options: AppOptions = {}) {
+  const maxBodyBytes = options.maxBodyBytes ?? 10 * 1024 * 1024;
+  const maxHarEntries = options.maxHarEntries ?? 5000;
+  const allowedOrigins = new Set(
+    options.allowedOrigins ?? [
+      "http://127.0.0.1:5173",
+      "http://localhost:5173",
+    ],
+  );
+  const app = Fastify({
+    logger: options.logger ?? true,
+    bodyLimit: maxBodyBytes,
+  });
+  const persistence = new SqlitePersistence(
+    options.dbPath ??
+      (process.env.NODE_ENV === "test"
+        ? ":memory:"
+        : (process.env.SURFACETRACE_DB_PATH ?? "./data/surfacetrace.db")),
+  );
+  let activeProject =
+    persistence.listProjects()[0] ??
+    persistence.createProject("Untitled Investigation");
+  const restored = persistence.load(activeProject.id);
+  let activeImport: ImportRecord | null = restored?.activeImport ?? null;
+  let ledger = new EvidenceLedger(restored?.evidence ?? []);
+  let experiments: Experiment[] = restored?.experiments ?? [];
+  let assets: Asset[] = restored?.assets ?? [];
+  let trustBoundaries: TrustBoundary[] = restored?.trustBoundaries ?? [];
+  let lastImport: ReturnType<typeof importHar> | null = null;
+  let lastGraph: ReturnType<typeof buildGraph> | null = null;
+  let lastHypotheses: ReturnType<typeof generateHypotheses> | null = restored
+    ?.hypotheses.length
+    ? restored.hypotheses
+    : null;
+  let identities: IdentityContext[] = restored?.identities.length
+    ? restored.identities
+    : defaultIdentities();
+  if (restored?.activeImport) {
+    lastImport = {
+      observations: restored.observations,
+      endpoints: restored.endpoints,
+      inputs: restored.inputs,
+      skippedEntries: restored.activeImport.skippedEntryCount,
+    };
+  }
+  const requestSnapshots = new WeakMap<object, PersistedState>();
+  const newImportRequests = new WeakSet<object>();
+
+  function state(): PersistedState {
+    return {
+      project: activeProject,
+      activeImport,
+      observations: lastImport?.observations ?? [],
+      endpoints: lastImport?.endpoints ?? [],
+      inputs: lastImport?.inputs ?? [],
+      identities,
+      assets,
+      trustBoundaries,
+      hypotheses: lastHypotheses ?? [],
+      experiments,
+      evidence: [...ledger.all()],
+    };
+  }
+
+  function restoreState(snapshot: PersistedState): void {
+    activeProject = snapshot.project;
+    activeImport = snapshot.activeImport;
+    lastImport = snapshot.activeImport
+      ? {
+          observations: snapshot.observations,
+          endpoints: snapshot.endpoints,
+          inputs: snapshot.inputs,
+          skippedEntries: snapshot.activeImport.skippedEntryCount,
+        }
+      : null;
+    identities = snapshot.identities.length
+      ? snapshot.identities
+      : defaultIdentities();
+    assets = snapshot.assets;
+    trustBoundaries = snapshot.trustBoundaries;
+    lastHypotheses = snapshot.hypotheses.length ? snapshot.hypotheses : null;
+    experiments = snapshot.experiments;
+    ledger = new EvidenceLedger(snapshot.evidence);
+    refreshGraph();
+  }
 
   function refreshGraph(): void {
     if (!lastImport || !lastHypotheses) return;
@@ -148,6 +222,27 @@ export function buildApp(options: AppOptions = {}) {
       experiments,
     });
   }
+  refreshGraph();
+
+  app.addHook("onRequest", async (request) => {
+    if (["POST", "PATCH", "DELETE"].includes(request.method))
+      requestSnapshots.set(request, structuredClone(state()));
+  });
+  app.addHook("onSend", async (request, reply, payload) => {
+    const snapshot = requestSnapshots.get(request);
+    if (snapshot && reply.statusCode < 400) {
+      try {
+        activeProject.updatedAt = new Date().toISOString();
+        persistence.save(state(), newImportRequests.has(request));
+      } catch (error) {
+        restoreState(snapshot);
+        throw error;
+      }
+    }
+    requestSnapshots.delete(request);
+    return payload;
+  });
+  app.addHook("onClose", async () => persistence.close());
 
   void app.register(cors, {
     origin(origin, callback) {
@@ -179,71 +274,118 @@ export function buildApp(options: AppOptions = {}) {
     version: "0.1.0",
     ledgerTip: ledger.tipHash(),
     ledgerValid: ledger.verify(),
+    schemaVersion: persistence.schemaVersion(),
   }));
-  app.post<{ Body: { har: string } }>("/import/har", async (request, reply) => {
-    const { har: raw } = request.body ?? {};
-    if (!raw || typeof raw !== "string")
-      return reply.status(400).send({ error: "body.har (string) required" });
-    let har;
-    try {
-      har = parseHarJson(raw);
-    } catch (error) {
-      return reply.status(400).send({
-        error: "Invalid HAR JSON",
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-    if (har.log.entries.length > maxHarEntries) {
-      return reply.status(400).send({
-        error: `HAR contains ${har.log.entries.length} entries; maximum is ${maxHarEntries}`,
-      });
-    }
-    let result;
-    try {
-      result = importHar(har);
-    } catch (error) {
-      return reply.status(400).send({
-        error: "HAR could not be normalized",
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-    const hypotheses = generateHypotheses(
-      result.endpoints,
-      result.inputs,
-      result.observations,
+  app.get("/projects", async () => ({
+    projects: persistence.listProjects(),
+    activeProjectId: activeProject.id,
+  }));
+  app.post<{ Body: { name?: string } }>("/projects", async (request, reply) => {
+    const project = persistence.createProject(
+      request.body?.name?.trim() || "Untitled Investigation",
     );
-    lastImport = result;
-    lastHypotheses = hypotheses;
-    for (const hypothesis of hypotheses.filter(
-      (item) => item.reasoning?.category === "ssrf",
-    )) {
-      const reasoning = hypothesis.reasoning!;
-      const evidence = ledger.append("note", {
-        endpointId: hypothesis.endpointId,
-        inputId: reasoning.inputId,
-        signalType: reasoning.signalType,
-        signalReason: reasoning.signalReason,
-        generatedQuestion: hypothesis.question,
-        provenance: "inferred",
-      });
-      hypothesis.evidenceIds.push(evidence.id);
-    }
-    refreshGraph();
-    ledger.append("observation", {
-      count: result.observations.length,
-      endpoints: result.endpoints.length,
-      skippedEntries: result.skippedEntries,
-    });
-    return {
-      observations: result.observations.length,
-      skippedEntries: result.skippedEntries,
-      endpoints: result.endpoints.length,
-      inputs: result.inputs.length,
-      hypotheses: hypotheses.length,
-      graph: { nodes: lastGraph!.nodes.length, edges: lastGraph!.edges.length },
-      evidenceTip: ledger.tipHash(),
-    };
+    return reply.status(201).send(project);
   });
+  app.post<{ Params: { projectId: string } }>(
+    "/projects/:projectId/open",
+    async (request, reply) => {
+      const loaded = persistence.load(request.params.projectId);
+      if (!loaded)
+        return reply.status(404).send({ error: "Project not found" });
+      restoreState(loaded);
+      return {
+        project: activeProject,
+        inventoryAvailable: Boolean(lastImport),
+      };
+    },
+  );
+  app.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId/imports",
+    async (request, reply) => {
+      if (!persistence.load(request.params.projectId))
+        return reply.status(404).send({ error: "Project not found" });
+      return { imports: persistence.listImports(request.params.projectId) };
+    },
+  );
+  app.post<{ Body: { har: string; sourceLabel?: string } }>(
+    "/import/har",
+    async (request, reply) => {
+      const { har: raw } = request.body ?? {};
+      if (!raw || typeof raw !== "string")
+        return reply.status(400).send({ error: "body.har (string) required" });
+      let har;
+      try {
+        har = parseHarJson(raw);
+      } catch (error) {
+        return reply.status(400).send({
+          error: "Invalid HAR JSON",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (har.log.entries.length > maxHarEntries) {
+        return reply.status(400).send({
+          error: `HAR contains ${har.log.entries.length} entries; maximum is ${maxHarEntries}`,
+        });
+      }
+      let result;
+      try {
+        result = importHar(har);
+      } catch (error) {
+        return reply.status(400).send({
+          error: "HAR could not be normalized",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const hypotheses = generateHypotheses(
+        result.endpoints,
+        result.inputs,
+        result.observations,
+      );
+      lastImport = result;
+      lastHypotheses = hypotheses;
+      activeImport = {
+        id: crypto.randomUUID(),
+        projectId: activeProject.id,
+        createdAt: new Date().toISOString(),
+        observationCount: result.observations.length,
+        skippedEntryCount: result.skippedEntries,
+        sourceLabel: request.body.sourceLabel?.trim() || "HAR import",
+      };
+      newImportRequests.add(request);
+      for (const hypothesis of hypotheses.filter(
+        (item) => item.reasoning?.category === "ssrf",
+      )) {
+        const reasoning = hypothesis.reasoning!;
+        const evidence = ledger.append("note", {
+          endpointId: hypothesis.endpointId,
+          inputId: reasoning.inputId,
+          signalType: reasoning.signalType,
+          signalReason: reasoning.signalReason,
+          generatedQuestion: hypothesis.question,
+          provenance: "inferred",
+        });
+        hypothesis.evidenceIds.push(evidence.id);
+      }
+      refreshGraph();
+      ledger.append("observation", {
+        count: result.observations.length,
+        endpoints: result.endpoints.length,
+        skippedEntries: result.skippedEntries,
+      });
+      return {
+        observations: result.observations.length,
+        skippedEntries: result.skippedEntries,
+        endpoints: result.endpoints.length,
+        inputs: result.inputs.length,
+        hypotheses: hypotheses.length,
+        graph: {
+          nodes: lastGraph!.nodes.length,
+          edges: lastGraph!.edges.length,
+        },
+        evidenceTip: ledger.tipHash(),
+      };
+    },
+  );
 
   app.get(
     "/graph",

@@ -5,6 +5,12 @@ export class EvidenceLedger {
   private records: EvidenceRecord[] = [];
   private lastHash: string | null = null;
 
+  constructor(records: readonly EvidenceRecord[] = []) {
+    this.records = records.map((record) => structuredClone(record));
+    this.lastHash = this.records.at(-1)?.contentHash ?? null;
+    if (!this.verify()) throw new Error("Persisted evidence chain is invalid");
+  }
+
   append(
     kind: EvidenceRecord["kind"],
     payload: unknown
