@@ -259,6 +259,24 @@ curl http://127.0.0.1:8787/health
 
 Then open `http://localhost:5173`. The expected starting navigation includes **COMMAND CENTER**, **INVESTIGATION**, **CLASSROOM**, and **EVIDENCE**.
 
+### Step 7: Understand Local Ports and VS Code Forwarding
+
+When VS Code opens this repository as a normal Windows folder, SurfaceTrace listens directly on the Windows host. The API binds to `127.0.0.1:8787`, and Vite binds to `0.0.0.0:5173` so the browser can reach `http://localhost:5173`. These listeners do not need forwarding and may not appear in VS Code's **Ports** panel.
+
+The Ports panel is primarily used when VS Code is connected to another environment, such as a Dev Container, WSL session, SSH host, or Codespace. In those cases, the process runs somewhere other than the local Windows host and VS Code forwards a remote port. A blank Ports panel in a local workspace does not mean SurfaceTrace failed.
+
+Use three checks in order:
+
+1. **Terminal check:** both `npm run dev` and `npm run dev:web` must remain running in separate terminals. If either command returns to the prompt, read its final error; it did not open a port.
+2. **HTTP check:** open `http://127.0.0.1:8787/health` and `http://localhost:5173`. Healthy API JSON and a rendered UI prove the services are reachable even if the Ports panel is empty.
+3. **Socket check on Windows:** run the following PowerShell command.
+
+```powershell
+Get-NetTCPConnection -LocalPort 5173,8787 -State Listen
+```
+
+This command asks Windows for listening TCP sockets only on the two SurfaceTrace ports. Success shows rows for port 8787 and port 5173 with owning process IDs. No rows means the start commands are not running. If startup stopped at the SurfaceTrace Node check, select Node 22 and retry; the guard intentionally exits before opening ports under unsupported Node versions.
+
 ### Docker Alternative
 
 The Compose service is a development container that starts idle:
@@ -684,6 +702,10 @@ Does /health connect?
     Does the UI open on :5173?
     |-- No -> Is npm run dev:web running? Is port 5173 free?
     |-- Yes
+        |
+        Is the VS Code Ports panel empty in a local Windows workspace?
+        |-- Yes -> Expected. Open localhost directly or inspect Windows sockets.
+        |-- No/remote -> Confirm the remote 5173 and 8787 ports are forwarded.
         |
         Does import fail?
         |-- Invalid HAR -> Confirm you selected fixtures/sample.har unchanged.
