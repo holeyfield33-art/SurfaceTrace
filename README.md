@@ -10,7 +10,7 @@ SurfaceTrace is for learners and testers who want a structured method for unders
 
 ## Quick Start
 
-Use Node 22 as specified by `.nvmrc`.
+Use Node 22 as specified by `.nvmrc`. SurfaceTrace enforces Node 22 because the SQLite adapter uses a native binary that must match the Node version used during installation.
 
 ```bash
 npm install
@@ -32,6 +32,17 @@ npm run dev:web
 ```
 
 `npm run dev` starts Fastify on port `8787`; keep that terminal open. In a second terminal, `npm run dev:web` starts Vite on port `5173` and proxies browser API calls to Fastify. Stop either process with `Ctrl+C` in its terminal.
+
+If all three server test suites fail with `NODE_MODULE_VERSION` or `better_sqlite3.node`, your terminal is using a different Node version from the one that installed dependencies. Run `node --version`; it must report Node 22. If you use a Node version manager, select the supported runtime and repair the native installation with:
+
+```bash
+nvm use 22
+node --version
+npm install
+npm test
+```
+
+On the current SurfaceTrace Windows workstation, the equivalent PowerShell selection is `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`. This fallback is machine-specific; other contributors should use their own Node manager or Node 22 installation. `npm install` ensures native dependencies match the selected runtime, and `npm test` confirms the repair. Do not rebuild dependencies under Node 24 and then return to Node 22; switching runtimes recreates the same native ABI mismatch.
 
 Open `http://localhost:5173`. API health is available at `http://127.0.0.1:8787/health`.
 

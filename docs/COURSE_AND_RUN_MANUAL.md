@@ -188,7 +188,7 @@ cd SurfaceTrace
 
 ### Step 2: Select Node and Install Dependencies
 
-The repository specifies Node 22 in `.nvmrc`.
+The repository specifies Node 22 in `.nvmrc`, CI, and Docker, and `engine-strict` rejects installation under unsupported Node versions. This matters because `better-sqlite3` contains a native binary compiled for the Node runtime active during installation.
 
 ```bash
 npm install
@@ -197,6 +197,17 @@ npm install
 **Success:** npm completes without an error and creates or updates local dependency installation state.
 **Failure:** native-module errors commonly mean the wrong Node version or missing build tools. Check `node --version` first.
 **Why:** the server, web app, compiler, and test runners are workspace dependencies.
+
+If the server reports three failed suites and many tests all mention `better_sqlite3.node`, `NODE_MODULE_VERSION`, or "compiled against a different Node.js version," treat them as one environment failure. The tests are not independently broken. Select Node 22 in the same terminal, verify `node --version`, run `npm install` once under Node 22, and rerun `npm test`. With a Node version manager:
+
+```bash
+nvm use 22
+node --version
+npm install
+npm test
+```
+
+The first command asks your installed version manager to select Node 22. If this workstation's standalone toolchain is being used instead, PowerShell can select it for the current session with `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`; that path is not portable to other machines. The version check must show `v22.x`. Installation compiles or selects native dependencies for Node 22, and the test command verifies all workspaces. Avoid `npm rebuild` under Node 24: that would repair the binary for Node 24 while breaking the supported Node 22 runtime again.
 
 ### Step 3: Verify Before Running
 
@@ -678,6 +689,9 @@ Does /health connect?
         |-- Invalid HAR -> Confirm you selected fixtures/sample.har unchanged.
         |-- Too large -> Check configured HAR byte/entry limits.
         |-- No inventory -> Read the API terminal and browser console.
+        |-- Three server suites fail with NODE_MODULE_VERSION
+        |   -> Terminal uses the wrong Node runtime. Select Node 22,
+        |      run npm install under Node 22, then rerun npm test.
         |
         Does active preview deny?
         |-- No active scope -> Configure exact authorized scope.
