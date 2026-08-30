@@ -31,6 +31,12 @@ npm run dev
 npm run dev:web
 ```
 
+To practice the replay lesson boundary in isolation, start the teaching lab separately:
+
+```bash
+npm run lab
+```
+
 `npm run dev` starts Fastify on port `8787`; keep that terminal open. In a second terminal, `npm run dev:web` starts Vite on port `5173` and proxies browser API calls to Fastify. Stop either process with `Ctrl+C` in its terminal.
 
 If all three server test suites fail with `NODE_MODULE_VERSION` or `better_sqlite3.node`, your terminal is using a different Node version from the one that installed dependencies. Run `node --version`; it must report Node 22. If you use a Node version manager, select the supported runtime and repair the native installation with:

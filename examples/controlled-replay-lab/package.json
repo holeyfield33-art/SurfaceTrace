@@ -1,0 +1,9 @@
+{
+  "name": "controlled-replay-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node lab.mjs",
+    "test": "node --test"
+  }
+}

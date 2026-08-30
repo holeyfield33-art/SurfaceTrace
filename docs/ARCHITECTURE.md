@@ -124,3 +124,9 @@ The web development server listens on port `5173` and proxies `/api` to Fastify 
 ## Explicit Non-Goals
 
 SurfaceTrace does not provide autonomous exploitation, internet-wide scanning, bulk fuzzing, payload libraries, cloud collection of raw sessions, AI vulnerability verdicts, automatic redirects, or retry loops.
+
+## Controlled Replay Lab
+
+The repository also includes `examples/controlled-replay-lab/`, a separate teaching app for replay practice. It is intentionally outside the SurfaceTrace production server boundary and exists only to demonstrate localhost-only route behavior, deterministic comparison objects, redirect handling, slow-response timing, and bounded large responses in a synthetic environment.
+
+The lab is not wired into the Fastify API, SQLite persistence, or the SurfaceTrace web UI. It should be started explicitly with its own command and is expected to stay on loopback unless an operator deliberately opts into an unsafe override.
