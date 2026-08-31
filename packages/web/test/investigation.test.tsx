@@ -260,11 +260,10 @@ describe("investigation loop", () => {
     await user.click(
       await screen.findByRole("button", { name: "INVESTIGATION" }),
     );
-    await user.click(
-      await screen.findByRole("button", {
-        name: /GET \/api\/projects\/\{id\}/,
-      }),
-    );
+    const endpointLabel = await screen.findByText("/api/projects/{id}");
+    const endpointButton = endpointLabel.closest("button");
+    expect(endpointButton).toBeTruthy();
+    await user.click(endpointButton!);
     expect(
       screen.getByText(/GET \/api\/projects\/100\?view=full HTTP\/1.1/),
     ).toBeTruthy();
