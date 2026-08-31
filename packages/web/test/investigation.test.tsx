@@ -179,8 +179,8 @@ afterEach(() => {
 
 describe("investigation loop", () => {
   test("curriculum manifest keeps the first-session lesson batch complete and validated", () => {
-    expect(completedLessonCount()).toBeGreaterThanOrEqual(10);
-    expect(completedLessonCount()).toBeLessThanOrEqual(15);
+    expect(curriculum).toHaveLength(135);
+    expect(completedLessonCount()).toBe(15);
     expect(validateCurriculum()).toEqual([]);
     const completeLessons = curriculum.filter((lesson) => lesson.content);
     expect(

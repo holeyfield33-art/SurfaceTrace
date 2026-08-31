@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  completedLessonCount,
   curriculum,
   lessonById,
   trackNames,
@@ -3110,6 +3111,8 @@ function Classroom({
   onReturn: () => void;
   recommendation?: ReturnType<typeof recommendLessons>[number];
 }) {
+  const completeLessonTotal = completedLessonCount();
+  const outlineTotal = curriculum.length - completeLessonTotal;
   if (selected)
     return (
       <main className="lesson-page reveal">
@@ -3187,8 +3190,8 @@ function Classroom({
         <span className="eyebrow">CLASSROOM / LOCAL PROGRESS</span>
         <h1>Learn what the traffic is telling you.</h1>
         <p>
-          Eight complete lessons bridge code, HTTP, application behavior, and
-          security reasoning. The remaining catalog entries are syllabus
+          {completeLessonTotal} complete lessons bridge code, HTTP, application
+          behavior, and security reasoning. The remaining {outlineTotal} catalog entries are syllabus
           outlines, not finished lessons; use the Course and Run Manual for the
           complete beginner path.
         </p>

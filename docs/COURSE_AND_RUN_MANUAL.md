@@ -39,7 +39,7 @@ Evidence in SurfaceTrace is not a claim that an AI found a vulnerability. Eviden
 
 The audit for this manual covered all repository Markdown, the React UI strings, every Fastify route, exported core behavior, package scripts, and all four entries in `fixtures/sample.har`.
 
-The current UI supports HAR import, inventory counts, endpoint focus, raw redacted HTTP inspection, parsed inputs, identity assignment, graph context, manual asset and trust-boundary annotations, generated threat cards, passive identity comparison, an experiment notebook, runtime scope configuration and no-network preview, and a bounded active-replay panel. The Evidence view displays hash-linked records. The Classroom catalog contains 135 mapped topics, but only eight currently have complete seven-step in-app lessons; the other 127 are clearly labeled syllabus outlines. This manual is the authoritative complete beginner sequence.
+The current UI supports HAR import, inventory counts, endpoint focus, raw redacted HTTP inspection, parsed inputs, identity assignment, graph context, manual asset and trust-boundary annotations, generated threat cards, passive identity comparison, an experiment notebook, runtime scope configuration and no-network preview, and a bounded active-replay panel. The Evidence view displays hash-linked records. The Classroom catalog contains 135 mapped topics: 15 currently have complete seven-step in-app lessons and 120 are clearly labeled syllabus outlines. This manual is the authoritative complete beginner sequence.
 
 The API additionally exposes project creation/opening, import history, direct inventory/graph/endpoints/hypotheses/evidence retrieval, runtime replay credential registration, and record update routes. Those API-only operations are documented in the appendix.
 
@@ -217,7 +217,7 @@ npm run typecheck
 npm run build
 ```
 
-**Success:** 149 tests pass, typechecking exits successfully, and Vite reports a completed production build.
+**Success:** every unit and integration suite passes, typechecking exits successfully, and Vite reports a completed production build. Do not rely on a hard-coded test total; the authoritative count is the output for the checked-out revision.
 **Failure:** stop and read the first failing workspace rather than the final npm summary.
 **Why:** a clean baseline separates installation problems from later investigation behavior.
 
@@ -627,7 +627,10 @@ The cheat sheet is a memory aid after you have completed Chapter 3. Here is what
 | Command | Why you run it | Success signal |
 | --- | --- | --- |
 | `npm install` | Install all workspace dependencies | npm exits successfully; no installation error |
-| `npm test` | Check core, API, persistence, replay, and UI behavior | All 149 tests pass |
+| `npm test` | Check core, API, persistence, replay, and UI behavior | Every discovered unit and integration test passes |
+| `npm run e2e` | Build and run the Chromium launch workflow | Every browser E2E scenario passes and listeners stop |
+| `npm run lab:test` | Verify the synthetic replay lab | Every replay-lab test passes |
+| `npm run team:test` | Verify security-team manifests and gates | Every deterministic security-gate test passes |
 | `npm run typecheck` | Validate TypeScript contracts without emitting files | All workspace typechecks exit successfully |
 | `npm run build` | Compile packages and produce the web bundle | TypeScript and Vite complete without error |
 | `npm run dev` | Start the Fastify API watcher | The API listens on `127.0.0.1:8787` |
@@ -732,4 +735,4 @@ If the issue remains, preserve the exact error text, route, and safe reproductio
 
 The current version intentionally does not include a traffic-capture proxy, crawler, scanner, bulk replay, fuzzing engine, payload library, automatic ID iteration, automatic redirect following, retries, automatic attack generation, autonomous exploitation, AI vulnerability verdicts, internet-wide scanning, or cloud collection of raw sessions.
 
-A full free-form threat-diagram editor and automatic proxy integration are also not present. Of the 135 Classroom topics, eight have complete in-app lesson prose and 127 are syllabus outlines rather than complete courses. Use this manual for the complete SurfaceTrace learning path. Use browser DevTools, Burp Suite, or Caido for authorized capture and manual proxy work, then use SurfaceTrace for structured investigation and evidence.
+A full free-form threat-diagram editor and automatic proxy integration are also not present. Of the 135 Classroom topics, 15 have complete in-app lesson prose and 120 are syllabus outlines rather than complete courses. Use this manual for the complete SurfaceTrace learning path. Use browser DevTools, Burp Suite, or Caido for authorized capture and manual proxy work, then use SurfaceTrace for structured investigation and evidence.
