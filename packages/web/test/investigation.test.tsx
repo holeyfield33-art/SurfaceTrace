@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import App from "../src/App";
@@ -1047,28 +1047,15 @@ describe("investigation loop", () => {
     );
     await user.selectOptions(screen.getByLabelText("Paper baseline"), "obs-100");
     await user.selectOptions(screen.getByLabelText("Paper input"), "input-id");
-    await user.type(screen.getByLabelText("Baseline class"), "object id");
-    await user.type(screen.getByLabelText("Mutation value"), "200");
-    await user.type(
-      screen.getByLabelText("Expected policy"),
-      "The server should keep ownership checks in place.",
-    );
-    await user.type(
-      screen.getByLabelText("Authorized reason"),
-      "A bounded training environment with explicit permission.",
-    );
-    await user.type(
-      screen.getByLabelText("Expected result"),
-      "One controlled response change.",
-    );
-    await user.type(
-      screen.getByLabelText("Stop condition"),
-      "Stop if the response shows unexpected real data.",
-    );
-    await user.type(
-      screen.getByLabelText("Must remain constant"),
-      "host, method, and observation source",
-    );
+    const setField = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    setField("Baseline class", "object id");
+    setField("Mutation value", "200");
+    setField("Expected policy", "Ownership checks remain in place.");
+    setField("Authorized reason", "Authorized synthetic training.");
+    setField("Expected result", "One controlled response change.");
+    setField("Stop condition", "Stop on unexpected real data.");
+    setField("Must remain constant", "host, method, source");
     expect(
       calls.filter((entry) => entry.endsWith("/api/replay/prepare")),
     ).toHaveLength(0);
