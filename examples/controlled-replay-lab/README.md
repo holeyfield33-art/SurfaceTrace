@@ -26,6 +26,8 @@ Defaults:
 
 - Host: `127.0.0.1`
 - Port: `4040`
+- Supervised runtime: `npm run dev:all`
+- Browser proxy: `http://127.0.0.1:5173/lab/`
 
 ## Routes
 
@@ -38,5 +40,6 @@ Defaults:
 ## Safety
 
 - The lab refuses non-loopback binding unless `LAB_UNSAFE_HOST=allow-nonloopback` is set explicitly.
+- Docker and development-container workflows keep the lab on container loopback and expose it through Vite's `/lab` proxy.
 - It uses synthetic data only.
-- It never auto-starts from the SurfaceTrace production server.
+- It remains a separate process and never starts from the SurfaceTrace production server itself.

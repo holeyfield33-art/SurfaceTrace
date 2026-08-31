@@ -221,81 +221,80 @@ npm run build
 **Failure:** stop and read the first failing workspace rather than the final npm summary.
 **Why:** a clean baseline separates installation problems from later investigation behavior.
 
-### Step 4: Start the API
+### Step 4: Start the Runtime
 
-In terminal one:
-
-```bash
-npm run dev
-```
-
-**Success:** the log includes `SurfaceTrace server listening on http://127.0.0.1:8787`.
-**Failure:** `EADDRINUSE` means port 8787 is already occupied. Stop the existing process or identify it before continuing.
-**Why:** Fastify owns import, redaction, persistence, scope, replay, diff, and evidence behavior.
-
-### Step 5: Start the Web UI
-
-In terminal two:
+Start the API, UI, and controlled replay lab in one foreground process:
 
 ```bash
-npm run dev:web
+npm run dev:all
 ```
 
-**Success:** Vite prints a local URL, normally `http://localhost:5173`.
-**Failure:** if port 5173 is occupied, stop the old UI process. Do not silently use a different port unless you also understand CORS and proxy configuration.
-**Why:** the React UI calls the API through Vite's `/api` proxy.
+**Success:** the log includes the API on `127.0.0.1:8787`, Vite on `127.0.0.1:5173`, and the controlled lab on `127.0.0.1:4040`. The command remains running.
+**Failure:** `EADDRINUSE` means one of those ports is already occupied. Stop the existing process or identify it before continuing. If any child exits, the launcher stops the others rather than leaving a partial runtime behind.
+**Why:** one command proves that every browser dependency is present. Fastify owns import, redaction, persistence, scope, replay, diff, and evidence behavior; Vite proxies `/api` and `/lab` to the loopback-only services.
+
+For focused development, the three equivalent individual commands are `npm run dev`, `npm run dev:web`, and `npm run lab` in separate terminals.
+
+### Step 5: Open the Web UI
+
+Open:
+
+`http://localhost:5173`
+
+**Success:** the starting navigation includes **COMMAND CENTER**, **INVESTIGATION**, **CLASSROOM**, and **EVIDENCE**.
+**Failure:** a connection error means `npm run dev:all` is not still running or port `5173` is unavailable. Vite uses a strict port and will not silently move to another port.
+**Why:** port `5173` is the supported browser entry point for both local and container workflows.
 
 ### Step 6: Health Check
 
-Open `http://127.0.0.1:8787/health` or run:
+Use the browser-facing proxy health route:
 
 ```bash
-curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:5173/api/health
 ```
 
-**Success:** JSON includes `"ok":true`, `"service":"surfacetrace-server"`, `"ledgerValid":true`, and a schema version.
-**Failure:** connection refused means the API process is not listening.
-**Why:** this distinguishes server readiness from a browser rendering issue.
+For a direct local API check, `curl http://127.0.0.1:8787/health` is equivalent.
 
-Then open `http://localhost:5173`. The expected starting navigation includes **COMMAND CENTER**, **INVESTIGATION**, **CLASSROOM**, and **EVIDENCE**.
+**Success:** JSON includes `"ok":true`, `"service":"surfacetrace-server"`, and the application version. `curl http://127.0.0.1:5173/lab/` separately confirms the controlled lab proxy.
+**Failure:** a `5173` connection refusal means Vite is unavailable. A proxy `5xx` means Vite is running but its loopback API or lab dependency is not.
+**Why:** these checks distinguish complete browser readiness from one isolated process being alive.
 
 ### Step 7: Understand Local Ports and VS Code Forwarding
 
-When VS Code opens this repository as a normal Windows folder, SurfaceTrace listens directly on Windows loopback. The API binds to `127.0.0.1:8787`, and Vite binds to `127.0.0.1:5173`. These listeners do not need forwarding and may not appear in VS Code's **Ports** panel. A non-loopback UI bind is not supported by the normal startup workflow.
+When VS Code opens this repository as a normal Windows folder, SurfaceTrace listens directly on Windows loopback at `5173`, `8787`, and `4040`. These listeners do not need forwarding and may not appear in VS Code's **Ports** panel.
 
-The Ports panel is primarily used when VS Code is connected to another environment, such as a Dev Container, WSL session, SSH host, or Codespace. In those cases, the process runs somewhere other than the local Windows host and VS Code forwards a remote port. A blank Ports panel in a local workspace does not mean SurfaceTrace failed.
+The Ports panel is primarily used when VS Code is connected to another environment, such as a Dev Container, WSL session, SSH host, or Codespace. The checked-in development-container configuration starts all services, forwards and labels `5173`, `8787`, and `4040`, and opens the UI. Keep all forwarded ports **Private**. Port `5173` is the supported browser entry point; use its `/api` and `/lab` proxies rather than making API or lab ports public. A blank Ports panel in a normal local workspace does not mean SurfaceTrace failed.
 
 Use three checks in order:
 
-1. **Terminal check:** both `npm run dev` and `npm run dev:web` must remain running in separate terminals. If either command returns to the prompt, read its final error; it did not open a port.
-2. **HTTP check:** open `http://127.0.0.1:8787/health` and `http://localhost:5173`. Healthy API JSON and a rendered UI prove the services are reachable even if the Ports panel is empty.
+1. **Terminal check:** `npm run dev:all` must remain running. If it returns to the prompt, read its final error; the launcher intentionally tears down a partial runtime.
+2. **HTTP check:** open `http://localhost:5173`, `http://localhost:5173/api/health`, and `http://localhost:5173/lab/`. A rendered UI and both JSON responses prove the full browser path is reachable.
 3. **Socket check on Windows:** run the following PowerShell command.
 
 ```powershell
-Get-NetTCPConnection -LocalPort 5173,8787 -State Listen
+Get-NetTCPConnection -LocalPort 5173,8787,4040 -State Listen
 ```
 
-This command asks Windows for listening TCP sockets only on the two SurfaceTrace ports. Success shows rows for port 8787 and port 5173 with owning process IDs. No rows means the start commands are not running. If startup stopped at the SurfaceTrace Node check, select Node 22 and retry; the guard intentionally exits before opening ports under unsupported Node versions.
+This command asks Windows for listening TCP sockets only on the three SurfaceTrace ports. Success shows rows for `5173`, `8787`, and `4040` with owning process IDs. Missing rows identify the process that failed. If startup stopped at the SurfaceTrace Node check, select Node 22 and retry; the guard intentionally exits before opening ports under unsupported Node versions.
 
 ### Docker Alternative
 
-The Compose service is a development container that starts idle:
+The Compose service builds dependencies and starts all three services automatically:
 
 ```bash
 docker compose up -d --build
 docker compose ps
-docker compose exec surfacetrace npm install
-docker compose exec surfacetrace npm test
 ```
 
-Start API and UI in separate terminals with:
+Wait for `docker compose ps` to report `healthy`, then verify the only host-published entry point:
 
 ```bash
-docker compose exec surfacetrace npm run dev
-docker compose exec surfacetrace npm run dev:web
+curl http://127.0.0.1:5173/
+curl http://127.0.0.1:5173/api/health
+curl http://127.0.0.1:5173/lab/
 ```
 
-If Docker cannot connect to its engine, start Docker Desktop first. Ports 8787 and 5173 are published by `docker-compose.yml`.
+If Docker cannot connect to its engine, start Docker Desktop first. Only host-loopback port `5173` is published by `docker-compose.yml`; ports `8787` and `4040` remain on container loopback behind the Vite proxy. Use `docker compose logs` if health does not become ready and `docker compose down` to stop the runtime without deleting named data.
 
 ## 4. First Successful Session with `fixtures/sample.har`
 
@@ -393,8 +392,8 @@ A successful response reports the same counts. Importing through either UI or AP
 
 **Goal:** finish with a reproducible record.
 **Action:** open **EVIDENCE** and review the hash-linked records. Refresh or restart the server and reload the saved investigation if desired.
-**Expected result:** evidence remains available and the health endpoint reports `ledgerValid: true`.
-**Explanation:** SQLite restores canonical records; hash links detect record-chain mutation.
+**Expected result:** evidence remains available and `GET /evidence` reports `valid: true` and `stateAnchored: true`.
+**Explanation:** SQLite restores canonical records; schema-v3 state anchors bind the active investigation snapshot to the hash-linked evidence tip and reject entity tampering on load.
 **Checkpoint:** distinguish ledger integrity from correctness of your conclusion.
 
 ## 5. The Full Method
@@ -600,23 +599,22 @@ npm test
 npm run typecheck
 npm run build
 
-# Run in two terminals
-npm run dev
-npm run dev:web
+# Run API, UI, and controlled lab
+npm run dev:all
 
-# Health
-curl http://127.0.0.1:8787/health
+# Browser-path health
+curl http://127.0.0.1:5173/api/health
+curl http://127.0.0.1:5173/lab/
 
 # Docker development environment
 docker compose up -d --build
 docker compose ps
-docker compose exec surfacetrace npm install
 docker compose exec surfacetrace npm test
 docker compose exec surfacetrace npm run typecheck
 docker compose exec surfacetrace npm run build
 
 # Stop local npm development processes
-# Press Ctrl+C in each terminal
+# Press Ctrl+C in the dev:all terminal
 
 # Stop Docker services
 docker compose down
@@ -633,14 +631,17 @@ The cheat sheet is a memory aid after you have completed Chapter 3. Here is what
 | `npm run team:test` | Verify security-team manifests and gates | Every deterministic security-gate test passes |
 | `npm run typecheck` | Validate TypeScript contracts without emitting files | All workspace typechecks exit successfully |
 | `npm run build` | Compile packages and produce the web bundle | TypeScript and Vite complete without error |
+| `npm run dev:all` | Start API, UI, and controlled lab as one supervised runtime | All three listeners start and the command remains running |
 | `npm run dev` | Start the Fastify API watcher | The API listens on `127.0.0.1:8787` |
 | `npm run dev:web` | Start the Vite UI watcher and API proxy | Vite reports `http://localhost:5173` |
-| `curl http://127.0.0.1:8787/health` | Ask the API whether storage and evidence are healthy | JSON contains `ok: true` and `ledgerValid: true` |
-| `docker compose up -d --build` | Build and start the optional idle development container | `docker compose ps` shows `surfacetrace` running |
-| `docker compose ps` | Display Compose service state | The service is listed without an exit status |
+| `npm run lab` | Start the controlled replay lab alone | The lab listens on `127.0.0.1:4040` |
+| `curl http://127.0.0.1:5173/api/health` | Verify the browser-facing API proxy | JSON contains `ok: true` and the server version |
+| `curl http://127.0.0.1:5173/lab/` | Verify the browser-facing controlled-lab proxy | JSON contains `ok: true` and the deterministic lab routes |
+| `docker compose up -d --build` | Build and start the supervised development runtime | `docker compose ps` eventually reports `healthy` |
+| `docker compose ps` | Display Compose service and health state | `surfacetrace` is running and healthy |
 | `docker compose exec surfacetrace ...` | Run the following npm command inside the running container | The corresponding npm success signal appears |
 | `docker compose down` | Stop and remove Compose containers and network | Compose reports removal; named data volumes remain |
-| `Ctrl+C` | Stop the foreground API or UI watcher | That terminal returns to its prompt |
+| `Ctrl+C` | Stop the foreground supervised or individual watcher | All supervised children stop and the terminal returns |
 
 ### API Route Table
 
@@ -648,7 +649,8 @@ The web development server proxies `/api/*` to these Fastify routes without the 
 
 | Method | Route | Current purpose |
 | --- | --- | --- |
-| GET | `/health` | Service, ledger, and schema health |
+| GET | `/` | API identity and health-route pointer |
+| GET | `/health` | Service identity and application version |
 | GET | `/projects` | List projects and active project |
 | POST | `/projects` | Create a project |
 | POST | `/projects/:projectId/open` | Restore a saved project |
@@ -663,6 +665,7 @@ The web development server proxies `/api/*` to these Fastify routes without the 
 | POST | `/scope/preview` | Evaluate a candidate without network activity |
 | POST | `/scope/redirect-preview` | Evaluate a redirect target without following it |
 | POST | `/scope/budget/consume` | Explicitly consume one configured budget unit |
+| POST | `/scope/stops/reset` | Explicitly reset one latched automatic stop and record evidence |
 | PUT | `/replay/credentials/:identityId` | Register runtime-only identity material |
 | POST | `/replay/prepare` | Reconstruct and preview one candidate |
 | POST | `/replay/:token/cancel` | Cancel a prepared candidate |
@@ -698,17 +701,17 @@ After normalization, the fixture has 4 observations, 3 endpoints, 8 endpoint-sco
 ### If You Get Stuck
 
 ```text
-Does /health connect?
-|-- No -> Is npm run dev still running? Is port 8787 free?
+Does :5173/api/health connect?
+|-- No -> Is npm run dev:all still running? Is port 5173 free?
 |-- Yes
     |
     Does the UI open on :5173?
-    |-- No -> Is npm run dev:web running? Is port 5173 free?
+    |-- No -> Inspect the dev:all output and browser console.
     |-- Yes
         |
         Is the VS Code Ports panel empty in a local Windows workspace?
         |-- Yes -> Expected. Open localhost directly or inspect Windows sockets.
-        |-- No/remote -> Confirm the remote 5173 and 8787 ports are forwarded.
+        |-- No/remote -> Use the private forwarded 5173 UI port and its proxies.
         |
         Does import fail?
         |-- Invalid HAR -> Confirm you selected fixtures/sample.har unchanged.
