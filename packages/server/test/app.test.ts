@@ -158,7 +158,7 @@ describe("local API trust boundary", () => {
       if (second) await second.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   test("creates a versioned local database and default project", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));

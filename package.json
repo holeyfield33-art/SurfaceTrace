@@ -17,7 +17,7 @@
     "dev:web": "npm run dev --workspace=@surfacetrace/web -- --host 0.0.0.0",
     "pretest": "npm run check:node",
     "test": "npm run test --workspaces --if-present",
-    "pretypecheck": "npm run check:node",
+    "pretypecheck": "npm run check:node && npm run build --workspace=@surfacetrace/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
   },
