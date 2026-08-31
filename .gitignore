@@ -49,6 +49,7 @@ data/
 *.db
 *.har
 !fixtures/**/*.har
+!e2e/fixtures/*.har
 
 # Evidence & redacted artifacts (keep out of git by default)
 evidence/
