@@ -15,6 +15,13 @@ test("normal development configuration is loopback-only", async () => {
     readFile(join(root, "docker-compose.yml"), "utf8"),
   ]);
   assert.doesNotMatch(rootPackage, /(?:--host\s+)?0\.0\.0\.0/);
+  const rootScripts = JSON.parse(rootPackage).scripts;
+  for (const script of ["predev", "predev:all"]) {
+    assert.match(
+      rootScripts[script],
+      /npm run build --workspace=@surfacetrace\/core/,
+    );
+  }
   assert.doesNotMatch(configSource, /host:\s*["']0\.0\.0\.0["']/);
   assert.match(
     configSource,

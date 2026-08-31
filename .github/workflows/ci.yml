@@ -74,8 +74,13 @@ jobs:
               docker compose logs
               exit 1
             fi
-            if [ "$(docker inspect --format='{{.State.Health.Status}}' "$container_id")" = "healthy" ]; then
+            health="$(docker inspect --format='{{.State.Health.Status}}' "$container_id")"
+            if [ "$health" = "healthy" ]; then
               exit 0
+            fi
+            if [ "$health" = "unhealthy" ]; then
+              docker compose logs
+              exit 1
             fi
             sleep 5
           done
