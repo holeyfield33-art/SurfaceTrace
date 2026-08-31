@@ -6,19 +6,26 @@ export default defineConfig(({ mode }) => {
   if (token && token.length < 32)
     throw new Error("SURFACETRACE_API_TOKEN must be at least 32 characters");
 
+  const apiProxy = {
+    "/api": {
+      target: "http://127.0.0.1:8787",
+      changeOrigin: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      rewrite: (path: string) => path.replace(/^\/api/, ""),
+    },
+  };
+
   return {
     plugins: [react()],
     server: {
       host: "127.0.0.1",
       port: 5173,
-      proxy: {
-        "/api": {
-          target: "http://127.0.0.1:8787",
-          changeOrigin: true,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          rewrite: (path) => path.replace(/^\/api/, ""),
-        },
-      },
+      proxy: apiProxy,
+    },
+    preview: {
+      host: "127.0.0.1",
+      port: 5173,
+      proxy: apiProxy,
     },
   };
 });

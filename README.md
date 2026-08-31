@@ -14,15 +14,19 @@ Use Node 22 as specified by `.nvmrc`. SurfaceTrace enforces Node 22 because the 
 
 ```bash
 npm install
+npm run lint
 npm test
 npm run typecheck
 npm run build
+npm run e2e:install
+npm run e2e
 ```
 
 - `npm install` installs the root and workspace dependencies recorded by the repository. Success means npm exits without an installation error.
 - `npm test` runs the core, server, and web test suites. Use it to confirm behavior before starting an investigation.
 - `npm run typecheck` asks TypeScript to validate all workspaces without changing source files.
 - `npm run build` compiles the server/core packages and creates the web production bundle. A completed Vite build is the final success signal.
+- `npm run e2e` builds the application and runs the guarded Chromium workflow against isolated synthetic loopback services. Unit/integration, browser E2E, replay-lab, and security-team gates are separate checks.
 
 Start the API and web UI in separate terminals:
 
@@ -55,6 +59,8 @@ Open `http://localhost:5173`. API health is available at `http://127.0.0.1:8787/
 SurfaceTrace is a single-user local tool, not a multi-tenant service. The API and Vite UI bind to loopback by default, and Docker publishes only the web proxy on host loopback. If `SURFACETRACE_API_TOKEN` is configured, every protected API request requires it, including requests arriving over loopback; the Vite development proxy reads the token at runtime and adds it server-side without compiling it into browser JavaScript. Project, observation, identity, and evidence state all belong to one local operator workspace; non-loopback UI exposure and shared multi-user deployment are unsupported.
 
 In a normal local Windows workspace, these are direct loopback listeners and may not appear in VS Code's **Ports** forwarding panel. That panel is mainly relevant when VS Code is attached to a Dev Container, WSL, SSH host, or Codespace. Verify that both `LocalAddress` values are `127.0.0.1` with `Get-NetTCPConnection -LocalPort 5173,8787 -State Listen`. If a start command exits after the Node-version check, no listener will be created; select Node 22 and run the command again.
+
+Forwarding headers such as `X-Forwarded-For` and `Forwarded` are not trusted authentication evidence. The development and preview proxies may inject a configured API token server-side, but a loopback proxy hop never converts an unauthenticated remote caller into a trusted caller. Non-loopback UI exposure is unsupported. Before authorized testing, inspect active listeners and Windows Firewall rules; do not assume that a browser URL, VS Code port panel, container mapping, or host firewall is private by default.
 
 ## Course and Run Manual
 

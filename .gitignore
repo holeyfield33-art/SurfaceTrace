@@ -39,6 +39,9 @@ Thumbs.db
 coverage/
 .nyc_output/
 tmp/
+test-results/
+playwright-report/
+.e2e-data/
 
 # Local data
 data/
@@ -46,6 +49,7 @@ data/
 *.db
 *.har
 !fixtures/**/*.har
+!e2e/fixtures/*.har
 
 # Evidence & redacted artifacts (keep out of git by default)
 evidence/

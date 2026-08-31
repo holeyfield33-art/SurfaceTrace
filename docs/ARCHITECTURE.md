@@ -119,9 +119,11 @@ Evidence is logically append-only and hash-linked. Replay appends distinct recor
 
 ## Runtime Topology
 
-The web development server listens on port `5173` and proxies `/api` to Fastify on port `8787`. SurfaceTrace is explicitly a single-user local workspace, not a multi-tenant service. Fastify binds to loopback by default. Docker Compose keeps Fastify on container loopback and publishes only the web proxy on host loopback, while mounting the workspace, keeping dependencies in a named volume, and persisting SQLite data in the `surfacetrace-data` volume.
+The web development and production-preview servers bind to `127.0.0.1:5173` and proxy `/api` to Fastify on `127.0.0.1:8787`. SurfaceTrace is explicitly a single-user local workspace, not a multi-tenant service. Fastify binds to loopback by default. Docker Compose keeps Fastify on container loopback and publishes only the web proxy on host loopback, while mounting the workspace, keeping dependencies in a named volume, and persisting SQLite data in the `surfacetrace-data` volume.
 
 An intentional non-loopback API bind requires an operator-supplied `SURFACETRACE_API_TOKEN` of at least 32 characters. Non-loopback requests must present that token as a bearer credential. This protects accidental remote exposure; it does not turn the globally active project model into a multi-user authorization architecture. Projects, observations, identities, and evidence share one local operator boundary.
+
+When token authentication is configured, protected routes require it even when the immediate peer is loopback. Vite injects the token at the server-side proxy boundary and does not compile it into browser JavaScript. Fastify does not trust `Forwarded`, `X-Forwarded-For`, or related headers by default. Operators must still inspect listeners, container forwarding, and host firewall rules; the loopback default is enforced but does not validate external infrastructure.
 
 ## Explicit Non-Goals
 

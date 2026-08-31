@@ -22,6 +22,8 @@ authorize
 
 Passive investigation sends no requests.
 
+Before starting either UI or API, verify the intended listeners and host firewall. The supported default is `127.0.0.1`; non-loopback UI exposure, port forwarding to untrusted clients, and shared-network deployment are unsupported. Proxy forwarding headers are not authentication evidence, and token authentication remains required for protected routes whenever `SURFACETRACE_API_TOKEN` is configured.
+
 ## Controlled Comparison
 
 ```text

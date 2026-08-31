@@ -17,6 +17,9 @@ const routes = {
     name: "Beta",
     owner: "Account B",
   }),
+  "/lab/projects/redirect": json(302, null, {
+    Location: "/lab/projects/100",
+  }),
   "/lab/redirect": json(302, null, { Location: "/lab/projects/100" }),
   "/lab/slow": async () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -40,7 +43,7 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify({ error: "not found" }));
     return;
   }
-  const result = await handler();
+  const result = typeof handler === "function" ? await handler() : handler;
   response.writeHead(result.status, {
     "Content-Type": "application/json",
     ...result.headers,

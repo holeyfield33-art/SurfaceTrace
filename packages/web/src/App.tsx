@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  completedLessonCount,
   curriculum,
   lessonById,
   trackNames,
@@ -648,6 +649,7 @@ function ScopePanel({
     allowed: boolean;
     reasonCode: string;
     reason: string;
+    requestSent: boolean;
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const csv = (value: string) =>
@@ -696,9 +698,10 @@ function ScopePanel({
       body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
     });
     const result = (await response.json()) as {
+      requestSent: boolean;
       decision: { allowed: boolean; reasonCode: string; reason: string };
     };
-    setDecision(result.decision);
+    setDecision({ ...result.decision, requestSent: result.requestSent });
   }
   return (
     <section className="panel scope-panel">
@@ -823,6 +826,7 @@ function ScopePanel({
             <b>{decision.allowed ? "IN SCOPE" : "OUT OF SCOPE"}</b>
             <code>{decision.reasonCode}</code>
             <p>{decision.reason}</p>
+            <strong>Request sent: {decision.requestSent ? "YES" : "NO"}</strong>
           </div>
         )}
       </div>
@@ -3107,6 +3111,8 @@ function Classroom({
   onReturn: () => void;
   recommendation?: ReturnType<typeof recommendLessons>[number];
 }) {
+  const completeLessonTotal = completedLessonCount();
+  const outlineTotal = curriculum.length - completeLessonTotal;
   if (selected)
     return (
       <main className="lesson-page reveal">
@@ -3184,8 +3190,8 @@ function Classroom({
         <span className="eyebrow">CLASSROOM / LOCAL PROGRESS</span>
         <h1>Learn what the traffic is telling you.</h1>
         <p>
-          Eight complete lessons bridge code, HTTP, application behavior, and
-          security reasoning. The remaining catalog entries are syllabus
+          {completeLessonTotal} complete lessons bridge code, HTTP, application
+          behavior, and security reasoning. The remaining {outlineTotal} catalog entries are syllabus
           outlines, not finished lessons; use the Course and Run Manual for the
           complete beginner path.
         </p>
