@@ -4,6 +4,21 @@
   "service": "surfacetrace",
   "workspaceFolder": "/workspace/SurfaceTrace",
   "overrideCommand": false,
+  "forwardPorts": [5173, 8787, 4040],
+  "portsAttributes": {
+    "5173": {
+      "label": "SurfaceTrace UI",
+      "onAutoForward": "openBrowser"
+    },
+    "8787": {
+      "label": "SurfaceTrace API",
+      "onAutoForward": "notify"
+    },
+    "4040": {
+      "label": "Controlled Replay Lab",
+      "onAutoForward": "notify"
+    }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -13,5 +28,5 @@
       ]
     }
   },
-  "postCreateCommand": "npm install"
+  "postCreateCommand": "npm run check:node"
 }

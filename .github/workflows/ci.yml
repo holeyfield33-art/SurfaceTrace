@@ -49,3 +49,39 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  container-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build and start the development container
+        env:
+          CODESPACE_NAME: ci-surface
+          GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: app.github.dev
+        run: docker compose up --detach --build
+      - name: Wait for the container health gate
+        run: |
+          for attempt in {1..36}; do
+            if [ "$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q surfacetrace)")" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker compose logs
+          exit 1
+      - name: Verify Docker and Codespaces-style entry points
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:5173/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:5173/api/health | grep '"ok":true'
+          curl --fail --silent --show-error http://127.0.0.1:5173/lab/projects/100 | grep '"id":100'
+          curl --fail --silent --show-error --header 'Host: ci-surface-5173.app.github.dev' http://127.0.0.1:5173/ >/dev/null
+          docker compose exec --no-TTY surfacetrace curl --fail --silent http://127.0.0.1:8787/health | grep '"ok":true'
+          docker compose exec --no-TTY surfacetrace curl --fail --silent http://127.0.0.1:4040/ | grep '"ok":true'
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Stop development container
+        if: always()
+        run: docker compose down --volumes
