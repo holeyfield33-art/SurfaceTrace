@@ -1015,7 +1015,7 @@ describe("investigation loop", () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (request: RequestInfo | URL, _init?: RequestInit) => {
         calls.push(String(request));
         const url = String(request);
         if (url.endsWith("/api/scope")) return jsonResponse({ scope: null });

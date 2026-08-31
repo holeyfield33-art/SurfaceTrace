@@ -197,17 +197,20 @@ describe("dedicated replay HTTP client", () => {
       response.setHeader("Set-Cookie", "session=response-secret");
       response.end('{"ok":true,"password":"response-secret"}');
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
   });
 
   test("does not follow redirects or retry", async () => {
