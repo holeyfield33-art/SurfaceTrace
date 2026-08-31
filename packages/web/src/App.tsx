@@ -648,6 +648,7 @@ function ScopePanel({
     allowed: boolean;
     reasonCode: string;
     reason: string;
+    requestSent: boolean;
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const csv = (value: string) =>
@@ -696,9 +697,10 @@ function ScopePanel({
       body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
     });
     const result = (await response.json()) as {
+      requestSent: boolean;
       decision: { allowed: boolean; reasonCode: string; reason: string };
     };
-    setDecision(result.decision);
+    setDecision({ ...result.decision, requestSent: result.requestSent });
   }
   return (
     <section className="panel scope-panel">
@@ -823,6 +825,7 @@ function ScopePanel({
             <b>{decision.allowed ? "IN SCOPE" : "OUT OF SCOPE"}</b>
             <code>{decision.reasonCode}</code>
             <p>{decision.reason}</p>
+            <strong>Request sent: {decision.requestSent ? "YES" : "NO"}</strong>
           </div>
         )}
       </div>

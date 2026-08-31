@@ -39,6 +39,9 @@ Thumbs.db
 coverage/
 .nyc_output/
 tmp/
+test-results/
+playwright-report/
+.e2e-data/
 
 # Local data
 data/
