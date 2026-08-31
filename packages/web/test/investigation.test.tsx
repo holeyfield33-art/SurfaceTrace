@@ -1,7 +1,12 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import App from "../src/App";
+import {
+  completedLessonCount,
+  curriculum,
+  validateCurriculum,
+} from "../src/lessons/curriculum";
 
 const endpoint = {
   id: "ep-project",
@@ -173,6 +178,27 @@ afterEach(() => {
 });
 
 describe("investigation loop", () => {
+  test("curriculum manifest keeps the first-session lesson batch complete and validated", () => {
+    expect(completedLessonCount()).toBeGreaterThanOrEqual(10);
+    expect(completedLessonCount()).toBeLessThanOrEqual(15);
+    expect(validateCurriculum()).toEqual([]);
+    const completeLessons = curriculum.filter((lesson) => lesson.content);
+    expect(
+      completeLessons.every((lesson) => lesson.exercise && lesson.quickCheck),
+    ).toBe(true);
+    expect(
+      completeLessons.every(
+        (lesson) =>
+          lesson.content &&
+          lesson.content.concept.trim() &&
+          lesson.content.example.trim() &&
+          lesson.content.connection.trim() &&
+          lesson.content.inspect.trim() &&
+          lesson.content.apply.trim(),
+      ),
+    ).toBe(true);
+  });
+
   test("imports, selects graph context, compares one variable, and saves evidence", async () => {
     const user = userEvent.setup();
     let inventoryReads = 0;
@@ -234,11 +260,10 @@ describe("investigation loop", () => {
     await user.click(
       await screen.findByRole("button", { name: "INVESTIGATION" }),
     );
-    await user.click(
-      await screen.findByRole("button", {
-        name: /GET \/api\/projects\/\{id\}/,
-      }),
-    );
+    const endpointLabel = await screen.findByText("/api/projects/{id}");
+    const endpointButton = endpointLabel.closest("button");
+    expect(endpointButton).toBeTruthy();
+    await user.click(endpointButton!);
     expect(
       screen.getByText(/GET \/api\/projects\/100\?view=full HTTP\/1.1/),
     ).toBeTruthy();
@@ -983,6 +1008,63 @@ describe("investigation loop", () => {
       expect(calls.filter((url) => url.includes("/send"))).toHaveLength(1),
     );
     expect(await screen.findByText("RESPONSE 200")).toBeTruthy();
+  });
+
+  test("keeps the paper preview worksheet local and non-executing", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL, _init?: RequestInit) => {
+        calls.push(String(request));
+        const url = String(request);
+        if (url.endsWith("/api/scope")) return jsonResponse({ scope: null });
+        if (url.endsWith("/api/import/har"))
+          return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/inventory")) return jsonResponse(inventory);
+        if (url.endsWith("/api/scope/preview"))
+          return jsonResponse({
+            requestSent: false,
+            decision: {
+              allowed: true,
+              reasonCode: "IN_SCOPE",
+              reason: "Candidate request matches the active project scope",
+            },
+          });
+        return jsonResponse({ error: "unexpected request" }, 404);
+      }),
+    );
+    render(<App />);
+    const file = new File(["{}"], "sample.har", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+    await user.upload(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      file,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "INVESTIGATION" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Paper baseline"), "obs-100");
+    await user.selectOptions(screen.getByLabelText("Paper input"), "input-id");
+    const setField = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    setField("Baseline class", "object id");
+    setField("Mutation value", "200");
+    setField("Expected policy", "Ownership checks remain in place.");
+    setField("Authorized reason", "Authorized synthetic training.");
+    setField("Expected result", "One controlled response change.");
+    setField("Stop condition", "Stop on unexpected real data.");
+    setField("Must remain constant", "host, method, source");
+    expect(
+      calls.filter((entry) => entry.endsWith("/api/replay/prepare")),
+    ).toHaveLength(0);
+    await user.click(
+      screen.getByRole("button", { name: "SAVE PAPER WORKSHEET" }),
+    );
+    expect(localStorage.getItem("surfacetrace:paper-preview")).toContain(
+      "object id",
+    );
+    expect(screen.getByText(/Request sent: NO/i)).toBeTruthy();
   });
 });
 

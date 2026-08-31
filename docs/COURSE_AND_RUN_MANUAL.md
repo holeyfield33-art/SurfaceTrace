@@ -261,7 +261,7 @@ Then open `http://localhost:5173`. The expected starting navigation includes **C
 
 ### Step 7: Understand Local Ports and VS Code Forwarding
 
-When VS Code opens this repository as a normal Windows folder, SurfaceTrace listens directly on the Windows host. The API binds to `127.0.0.1:8787`, and Vite binds to `0.0.0.0:5173` so the browser can reach `http://localhost:5173`. These listeners do not need forwarding and may not appear in VS Code's **Ports** panel.
+When VS Code opens this repository as a normal Windows folder, SurfaceTrace listens directly on Windows loopback. The API binds to `127.0.0.1:8787`, and Vite binds to `127.0.0.1:5173`. These listeners do not need forwarding and may not appear in VS Code's **Ports** panel. A non-loopback UI bind is not supported by the normal startup workflow.
 
 The Ports panel is primarily used when VS Code is connected to another environment, such as a Dev Container, WSL session, SSH host, or Codespace. In those cases, the process runs somewhere other than the local Windows host and VS Code forwards a remote port. A blank Ports panel in a local workspace does not mean SurfaceTrace failed.
 

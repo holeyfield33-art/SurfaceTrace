@@ -1,0 +1,228 @@
+{
+  "repo": "C:\\Users\\SuperAdmin\\.vscode\\SurfaceTrace",
+  "files_scanned": 73,
+  "scoped_to_files": null,
+  "syntax": {
+    "errors": [],
+    "skipped_non_python_extensions": [
+      ".ts",
+      ".tsx"
+    ]
+  },
+  "duplicates": [
+    {
+      "fingerprint": "17f0b5e570e5",
+      "fingerprints": [
+        "17f0b5e570e5",
+        "22cadfa7f0e1",
+        "5526478ab3bf"
+      ],
+      "tokens": 17,
+      "occurrences": [
+        {
+          "file": "packages\\core\\src\\evidenceCoverage.ts",
+          "line": 15,
+          "start_line": 15,
+          "end_line": 20
+        },
+        {
+          "file": "packages\\web\\src\\App.tsx",
+          "line": 212,
+          "start_line": 212,
+          "end_line": 217
+        }
+      ]
+    },
+    {
+      "fingerprint": "20d8dcd6eb19",
+      "fingerprints": [
+        "20d8dcd6eb19",
+        "bf5190d91649",
+        "e68a23a991e3"
+      ],
+      "tokens": 17,
+      "occurrences": [
+        {
+          "file": "packages\\core\\src\\types.ts",
+          "line": 283,
+          "start_line": 283,
+          "end_line": 288
+        },
+        {
+          "file": "packages\\web\\src\\App.tsx",
+          "line": 50,
+          "start_line": 50,
+          "end_line": 55
+        }
+      ]
+    },
+    {
+      "fingerprint": "085038e2e6b1",
+      "fingerprints": [
+        "085038e2e6b1",
+        "449b0ab35607",
+        "7f55e4e9b867",
+        "94cd201fda6d",
+        "e907e5456061"
+      ],
+      "tokens": 16,
+      "occurrences": [
+        {
+          "file": "packages\\core\\src\\types.ts",
+          "line": 336,
+          "start_line": 336,
+          "end_line": 343
+        },
+        {
+          "file": "packages\\web\\src\\App.tsx",
+          "line": 200,
+          "start_line": 200,
+          "end_line": 207
+        }
+      ]
+    },
+    {
+      "fingerprint": "86471b57a5e9",
+      "fingerprints": [
+        "86471b57a5e9"
+      ],
+      "tokens": 13,
+      "occurrences": [
+        {
+          "file": "packages\\core\\src\\types.ts",
+          "line": 238,
+          "start_line": 238,
+          "end_line": 241
+        },
+        {
+          "file": "packages\\web\\src\\App.tsx",
+          "line": 94,
+          "start_line": 94,
+          "end_line": 97
+        }
+      ]
+    }
+  ],
+  "package_risks": {
+    "risks": [],
+    "ecosystems": {
+      "js": "checked",
+      "python": "no python files"
+    }
+  },
+  "comment_buzzwords": {
+    "total_comment_lines": 40,
+    "buzzword_count": 0,
+    "top_buzzwords": {}
+  },
+  "readme_hype": [],
+  "structural": {
+    "giant_files": [
+      {
+        "file": "packages\\core\\test\\core.test.ts",
+        "lines": 1068,
+        "is_test": true
+      },
+      {
+        "file": "packages\\server\\src\\app.ts",
+        "lines": 1711,
+        "is_test": false
+      },
+      {
+        "file": "packages\\server\\test\\app.test.ts",
+        "lines": 1125,
+        "is_test": true
+      },
+      {
+        "file": "packages\\web\\src\\App.tsx",
+        "lines": 3312,
+        "is_test": false
+      },
+      {
+        "file": "packages\\web\\test\\investigation.test.tsx",
+        "lines": 1090,
+        "is_test": true
+      }
+    ],
+    "deep_nesting": [],
+    "circular_imports": []
+  },
+  "dead_code": {
+    "stubs": [],
+    "unreferenced_definitions": [],
+    "unreferenced_exports_js": []
+  },
+  "summary": {
+    "hard_signals": {
+      "syntax_errors": 0,
+      "duplicate_blocks": 4,
+      "package_risks": 0,
+      "circular_imports": 0,
+      "stubs": 0
+    },
+    "soft_signals": {
+      "comment_buzzwords": 0,
+      "giant_files": 5,
+      "unreferenced_definitions": 0,
+      "unreferenced_exports_js": 0,
+      "readme_hype_files": 0
+    },
+    "syntax_errors": 0,
+    "duplicate_blocks": 4,
+    "package_risks": 0,
+    "comment_buzzwords": 0,
+    "circular_imports": 0,
+    "giant_files": 5,
+    "stubs": 0,
+    "unreferenced_definitions": 0,
+    "readme_hype_files": 0
+  },
+  "triage": {
+    "disposition": "FAST_TRACK",
+    "explanation": "no integrity or supply-chain signals blocking review",
+    "axes": {
+      "integrity": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "supply_chain": {
+        "status": "CLEAN",
+        "reasons": []
+      }
+    },
+    "observations": {
+      "circular_imports": {
+        "count": 0,
+        "cycles": [],
+        "note": "reported, not gated: cycles labelled 'deferred_late_import' use the deliberate late-binding pattern and are usually safe; 'top_level' cycles are worth a manual check."
+      },
+      "duplication": {
+        "clone_coverage_percent": 0.6,
+        "duplicated_lines": 48,
+        "duplicate_blocks": 4,
+        "note": "duplication tracks library architecture (API surface) as much as debt; interpret in context, not as a defect."
+      },
+      "stubs": {
+        "count": 0,
+        "note": "may be intentional scaffolding for a future phase; documented so a reviewer can confirm they are planned, not abandoned."
+      },
+      "unreferenced_definitions": {
+        "count": 0,
+        "note": "orphan scanner, not full dead-code analysis: any imported name counts as referenced, so an imported-but-never-called function is NOT flagged. It catches only definitions nothing imports at all. Expect under-reporting on well-wired apps; use a type-checker for true unused-export analysis."
+      },
+      "giant_files": {
+        "count": 5,
+        "source": 2,
+        "test": 3,
+        "note": "test files are often legitimately long (fixtures, parametrized cases); weigh source giants more heavily."
+      },
+      "unreferenced_exports_js": {
+        "count": 0,
+        "note": "grep-based orphan scanner for js/ts (no AST): an export is flagged only when its name appears in no other js/ts file. Index/barrel files, tests, examples, configs and .d.ts are never flagged. Coarser than the Python check by design; expect under-reporting, use a bundler/type-checker for true unused-export analysis."
+      },
+      "readme_hype_files": 0,
+      "comment_buzzwords": 0
+    },
+    "note": "Review-priority triage. Two hard axes (Integrity, Supply Chain) gate the disposition; observations are unbanded facts for a human or LLM to interpret. Not a quality/trust/AI-likelihood score."
+  }
+}

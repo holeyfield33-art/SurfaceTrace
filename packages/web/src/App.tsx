@@ -138,6 +138,7 @@ interface ExperimentRecord {
   requestDifferences: string[];
   diff: DiffView;
   conclusion: string | null;
+  structuredConclusion?: StructuredConclusion | null;
   notes: string | null;
   status: string;
   evidenceIds: string[];
@@ -192,6 +193,31 @@ interface Inventory {
   trustBoundaries?: BoundaryAnnotation[];
   graph?: GraphView;
   scope?: ProjectScope | null;
+  coverage?: EvidenceCoverageReport;
+}
+
+interface StructuredConclusion {
+  whatChanged: string | null;
+  whatRemainedConstant: string | null;
+  expectedPolicy: string | null;
+  supportingEvidence: string | null;
+  unknowns: string | null;
+  reproduced: boolean | null;
+  realUserDataEncountered: boolean | null;
+  shouldStopTesting: boolean | null;
+  evidenceReadiness: "incomplete_evidence" | "needs_reproduction" | "ready_for_peer_review" | null;
+}
+
+interface EvidenceCoverageReport {
+  importedObservationCount: number;
+  endpointCount: number;
+  hostCount: number;
+  captureTimeRange: { first: string | null; last: string | null };
+  methodsRepresented: string[];
+  identityContextsRepresented: string[];
+  findings: Array<{ title: string; detail: string }>;
+  questions: string[];
+  disclaimer: string;
 }
 interface ProjectScope {
   id?: string;
@@ -522,6 +548,65 @@ function CommandCenter({
           <small>{inventory.observations.length} normalized observations</small>
         </div>
       </section>
+      <section className="panel evidence-coverage-panel">
+        <PanelLabel number="06" label="EVIDENCE COVERAGE" />
+        {inventory.coverage ? (
+          <>
+            <div className="coverage-grid">
+              <div>
+                <strong>{inventory.coverage.importedObservationCount}</strong>
+                <span>Imported observations</span>
+              </div>
+              <div>
+                <strong>{inventory.coverage.endpointCount}</strong>
+                <span>Endpoints</span>
+              </div>
+              <div>
+                <strong>{inventory.coverage.hostCount}</strong>
+                <span>Hosts</span>
+              </div>
+              <div>
+                <strong>
+                  {inventory.coverage.methodsRepresented.join(", ")}
+                </strong>
+                <span>HTTP methods represented</span>
+              </div>
+            </div>
+            <p className="coverage-disclaimer">
+              {inventory.coverage.disclaimer}
+            </p>
+            <div className="coverage-window">
+              <b>Capture range</b>
+              <code>
+                {inventory.coverage.captureTimeRange.first ?? "Unknown"} -{" "}
+                {inventory.coverage.captureTimeRange.last ?? "Unknown"}
+              </code>
+            </div>
+            <div className="coverage-list">
+              {inventory.coverage.findings.map((item, index) => (
+                <article key={`${item.title}:${index}`}>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            <div className="coverage-questions">
+              {inventory.coverage.questions.map((question) => (
+                <span key={question}>{question}</span>
+              ))}
+            </div>
+            <div className="coverage-identities">
+              <small>
+                Identities: {inventory.coverage.identityContextsRepresented.join(
+                  ", ",
+                )}
+              </small>
+            </div>
+          </>
+        ) : (
+          <Empty text="Import evidence to review coverage questions." />
+        )}
+      </section>
       <ScopePanel
         key={scope?.id ?? "no-scope"}
         scope={scope}
@@ -741,6 +826,148 @@ function ScopePanel({
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+function PaperPreviewWorksheet({
+  observations,
+  inputs,
+}: {
+  observations: Observation[];
+  inputs: Input[];
+}) {
+  const [baselineId, setBaselineId] = useState("");
+  const [inputId, setInputId] = useState("");
+  const [baselineClass, setBaselineClass] = useState("");
+  const [mutationValue, setMutationValue] = useState("");
+  const [expectedPolicy, setExpectedPolicy] = useState("");
+  const [authorizedReason, setAuthorizedReason] = useState("");
+  const [expectedResult, setExpectedResult] = useState("");
+  const [stopCondition, setStopCondition] = useState("");
+  const [constant, setConstant] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const draft = {
+    baselineId,
+    inputId,
+    baselineClass,
+    mutationValue,
+    expectedPolicy,
+    authorizedReason,
+    expectedResult,
+    stopCondition,
+    constant,
+  };
+
+  function saveDraft(): void {
+    localStorage.setItem("surfacetrace:paper-preview", JSON.stringify(draft));
+    setMessage("Paper preview saved locally. No request was sent.");
+  }
+
+  return (
+    <section className="panel paper-preview-panel">
+      <PanelLabel number="07" label="PAPER PREVIEW WORKSHEET" />
+      <p>
+        Document the baseline, one changed value, and the reasoning on paper
+        first. This worksheet never sends a request.
+      </p>
+      <div className="structured-grid">
+        <label>
+          Selected imported baseline
+          <select
+            aria-label="Paper baseline"
+            value={baselineId}
+            onChange={(event) => setBaselineId(event.target.value)}
+          >
+            <option value="">Select a baseline</option>
+            {observations.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.method} {item.url}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          One selected input
+          <select
+            aria-label="Paper input"
+            value={inputId}
+            onChange={(event) => setInputId(event.target.value)}
+          >
+            <option value="">Select an input</option>
+            {inputs.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.location}: {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Baseline value class
+          <input
+            aria-label="Baseline class"
+            value={baselineClass}
+            onChange={(event) => setBaselineClass(event.target.value)}
+            placeholder="e.g. object identifier"
+          />
+        </label>
+        <label>
+          Mutation value
+          <input
+            aria-label="Mutation value"
+            value={mutationValue}
+            onChange={(event) => setMutationValue(event.target.value)}
+          />
+        </label>
+        <label>
+          Expected policy
+          <textarea
+            aria-label="Expected policy"
+            value={expectedPolicy}
+            onChange={(event) => setExpectedPolicy(event.target.value)}
+          />
+        </label>
+        <label>
+          Why is this authorized?
+          <textarea
+            aria-label="Authorized reason"
+            value={authorizedReason}
+            onChange={(event) => setAuthorizedReason(event.target.value)}
+          />
+        </label>
+        <label>
+          Expected result
+          <textarea
+            aria-label="Expected result"
+            value={expectedResult}
+            onChange={(event) => setExpectedResult(event.target.value)}
+          />
+        </label>
+        <label>
+          Stop condition
+          <textarea
+            aria-label="Stop condition"
+            value={stopCondition}
+            onChange={(event) => setStopCondition(event.target.value)}
+          />
+        </label>
+        <label>
+          What must remain constant?
+          <textarea
+            aria-label="Must remain constant"
+            value={constant}
+            onChange={(event) => setConstant(event.target.value)}
+          />
+        </label>
+      </div>
+      <button className="action" onClick={saveDraft}>
+        SAVE PAPER WORKSHEET
+      </button>
+      {message && <p>{message}</p>}
+      <p className="paper-preview-note">
+        Request sent: NO. This worksheet only records a local draft.
+      </p>
     </section>
   );
 }
@@ -1139,6 +1366,7 @@ function Investigation({
                 )}
               </ExperimentStep>
             </div>
+            <PaperPreviewWorksheet observations={observations} inputs={inputs} />
             {recommendations[0] && (
               <button
                 className="lesson-link"
@@ -2174,8 +2402,200 @@ function ExperimentDetail({
           <option value={value} key={value}>
             {label}
           </option>
-        ))}
+          ))}
       </select>
+      <h3>ESTABLISHED</h3>
+      <div className="structured-grid">
+        <label>
+          What changed?
+          <textarea
+            aria-label="What changed"
+            value={experiment.structuredConclusion?.whatChanged ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  whatChanged: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What remained constant?
+          <textarea
+            aria-label="What remained constant"
+            value={experiment.structuredConclusion?.whatRemainedConstant ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  whatRemainedConstant: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What policy was expected?
+          <textarea
+            aria-label="Expected policy"
+            value={experiment.structuredConclusion?.expectedPolicy ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  expectedPolicy: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          What evidence supports that policy?
+          <textarea
+            aria-label="Supporting evidence"
+            value={experiment.structuredConclusion?.supportingEvidence ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  supportingEvidence: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+      </div>
+      <h3>NOT ESTABLISHED</h3>
+      <div className="structured-grid">
+        <label>
+          What remains unknown?
+          <textarea
+            aria-label="Unknowns"
+            value={experiment.structuredConclusion?.unknowns ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  unknowns: event.target.value || null,
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          Was the behavior reproduced?
+          <select
+            aria-label="Reproduced"
+            value={
+              experiment.structuredConclusion?.reproduced === null ||
+              experiment.structuredConclusion?.reproduced === undefined
+                ? ""
+                : String(experiment.structuredConclusion.reproduced)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  reproduced:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+        <label>
+          Was real user data encountered?
+          <select
+            aria-label="Real user data"
+            value={
+              experiment.structuredConclusion?.realUserDataEncountered === null ||
+              experiment.structuredConclusion?.realUserDataEncountered === undefined
+                ? ""
+                : String(experiment.structuredConclusion.realUserDataEncountered)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  realUserDataEncountered:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      </div>
+      <h3>TESTER CONCLUSION</h3>
+      <div className="structured-grid">
+        <label>
+          Should testing stop?
+          <select
+            aria-label="Should testing stop"
+            value={
+              experiment.structuredConclusion?.shouldStopTesting === null ||
+              experiment.structuredConclusion?.shouldStopTesting === undefined
+                ? ""
+                : String(experiment.structuredConclusion.shouldStopTesting)
+            }
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  shouldStopTesting:
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "true",
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+        <label>
+          Evidence readiness
+          <select
+            aria-label="Evidence readiness"
+            value={experiment.structuredConclusion?.evidenceReadiness ?? ""}
+            onChange={(event) =>
+              void onUpdate({
+                structuredConclusion: {
+                  ...experiment.structuredConclusion,
+                  evidenceReadiness: (event.target.value ||
+                    null) as StructuredConclusion["evidenceReadiness"],
+                },
+              })
+            }
+          >
+            <option value="">Not selected</option>
+            <option value="incomplete_evidence">Incomplete evidence</option>
+            <option value="needs_reproduction">Needs reproduction</option>
+            <option value="ready_for_peer_review">Ready for peer review</option>
+          </select>
+        </label>
+      </div>
+      <h3>STOP DECISION</h3>
+      <p>
+        {experiment.structuredConclusion?.shouldStopTesting
+          ? "Testing should stop. The existing experiment close state will prevent further execution."
+          : "Testing may continue while the experiment remains open."}
+      </p>
       <h3>NOTES</h3>
       <textarea
         aria-label="Experiment notes"

@@ -6,6 +6,78 @@ import { buildApp } from "../src/app.js";
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
+  test("requires a strong bearer token on every protected hop when configured", async () => {
+    expect(() => buildApp({ logger: false, apiToken: "too-short" })).toThrow(
+      "at least 32 characters",
+    );
+    const apiToken = "a-secure-test-token-with-32-characters";
+    const app = buildApp({ logger: false, apiToken });
+    const denied = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+    });
+    expect(denied.statusCode).toBe(401);
+    const deniedLoopback = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "127.0.0.1",
+    });
+    expect(deniedLoopback.statusCode).toBe(401);
+    const forgedForwardingHeaders = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+      headers: {
+        "x-forwarded-for": "127.0.0.1",
+        forwarded: "for=127.0.0.1",
+      },
+    });
+    expect(forgedForwardingHeaders.statusCode).toBe(401);
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+      headers: { authorization: `Bearer ${apiToken}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+    const health = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress: "192.0.2.10",
+    });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({
+      ok: true,
+      service: "surfacetrace-server",
+      version: "0.1.0",
+    });
+    await app.close();
+  });
+
+  test("disables remote protected access when no authentication is configured", async () => {
+    const app = buildApp({ logger: false });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/projects",
+          remoteAddress: "192.0.2.10",
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/projects",
+          remoteAddress: "127.0.0.1",
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.close();
+  });
+
   test("persists scope lifecycle and previews candidates without network activity", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-scope-"));
     const dbPath = join(directory, "scope.db");
@@ -163,13 +235,15 @@ describe("local API trust boundary", () => {
   test("creates a versioned local database and default project", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));
     const dbPath = join(directory, "surfacetrace.db");
+    let app: ReturnType<typeof buildApp> | null = null;
     try {
-      const app = buildApp({ logger: false, dbPath });
+      app = buildApp({ logger: false, dbPath });
       expect(
         (await app.inject({ method: "GET", url: "/health" })).json(),
-      ).toMatchObject({
-        schemaVersion: 2,
-        ledgerValid: true,
+      ).toEqual({
+        ok: true,
+        service: "surfacetrace-server",
+        version: "0.1.0",
       });
       const projects = (
         await app.inject({ method: "GET", url: "/projects" })
@@ -185,10 +259,12 @@ describe("local API trust boundary", () => {
       expect(created.statusCode).toBe(201);
       expect(created.json().name).toBe("Persistence Review");
       await app.close();
+      app = null;
       expect(readFileSync(dbPath).subarray(0, 16).toString()).toBe(
         "SQLite format 3\u0000",
       );
     } finally {
+      if (app) await app.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -769,6 +845,90 @@ describe("local API trust boundary", () => {
       "experiment_closed",
     ]);
     expect(JSON.stringify(evidence)).not.toContain("private");
+    await app.close();
+  });
+
+  test("persists structured human conclusions and enforces peer-review readiness", async () => {
+    const app = buildApp({ logger: false });
+    await app.inject({
+      method: "POST",
+      url: "/import/har",
+      payload: { har: sample },
+    });
+    const inventory = (
+      await app.inject({ method: "GET", url: "/inventory" })
+    ).json();
+    const endpoint = inventory.endpoints.find(
+      (item: { pathTemplate: string }) =>
+        item.pathTemplate === "/api/projects/{id}",
+    );
+    const observations = inventory.observations.filter(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const hypothesis = inventory.hypotheses.find(
+      (item: { endpointId: string }) => item.endpointId === endpoint.id,
+    );
+    const input = inventory.inputs.find(
+      (item: { endpointId: string; location: string }) =>
+        item.endpointId === endpoint.id && item.location === "path",
+    );
+    const created = await app.inject({
+      method: "POST",
+      url: "/experiments",
+      payload: {
+        endpointId: endpoint.id,
+        hypothesisId: hypothesis.id,
+        inputId: input.id,
+        baselineObservationId: observations[0].id,
+        resultObservationId: observations[1].id,
+        mutation: { pathParam: { name: "id", from: "100", to: "200" } },
+      },
+    });
+    const experiment = created.json().experiment;
+    const rejected = await app.inject({
+      method: "PATCH",
+      url: `/experiments/${experiment.id}`,
+      payload: {
+        structuredConclusion: {
+          evidenceReadiness: "ready_for_peer_review",
+          supportingEvidence: "",
+        },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error).toContain("evidence links");
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/experiments/${experiment.id}`,
+      payload: {
+        structuredConclusion: {
+          whatChanged: "path id changed from 100 to 200",
+          whatRemainedConstant: "method, host, and route shape remained constant",
+          expectedPolicy: "Object ownership should be enforced consistently",
+          supportingEvidence: "experiment:" + experiment.id,
+          unknowns: "Need a peer to verify account ownership context",
+          reproduced: true,
+          realUserDataEncountered: false,
+          shouldStopTesting: true,
+          evidenceReadiness: "ready_for_peer_review",
+        },
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().experiment).toMatchObject({
+      status: "closed",
+      structuredConclusion: {
+        whatChanged: "path id changed from 100 to 200",
+        shouldStopTesting: true,
+        evidenceReadiness: "ready_for_peer_review",
+      },
+    });
+    const evidence = (await app.inject({ method: "GET", url: "/evidence" })).json();
+    expect(JSON.stringify(evidence)).not.toContain("private");
+    expect(
+      evidence.records.slice(-2).map((item: { payload: { event: string } }) => item.payload.event),
+    ).toEqual(expect.arrayContaining(["structured_conclusion_updated", "experiment_closed"]));
     await app.close();
   });
 

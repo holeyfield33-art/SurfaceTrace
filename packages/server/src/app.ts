@@ -1,11 +1,13 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import {
   EvidenceLedger,
   RequestBudget,
   REDACTED,
   assertOneVariable,
   buildGraph,
+  buildEvidenceCoverage,
   compareObservations,
   bodyShape,
   describeMutation,
@@ -25,6 +27,7 @@ import {
   type RuntimeCredential,
 } from "./replay/reconstruct.js";
 import { executeReplayRequest } from "./replay/httpClient.js";
+import { validateRuntimeCredentialHeaders } from "./replay/credentialHeaders.js";
 import type {
   Asset,
   AssetCategory,
@@ -37,6 +40,7 @@ import type {
   InputDescriptor,
   Observation,
   ProjectScope,
+  StructuredConclusion,
   TesterConclusion,
   TrustBoundary,
   TrustBoundaryType,
@@ -63,6 +67,11 @@ const TESTER_CONCLUSIONS = new Set<TesterConclusion>([
   "needs_more_testing",
   "potential_security_issue",
   "not_reproducible",
+]);
+const EVIDENCE_READINESS = new Set<StructuredConclusion["evidenceReadiness"]>([
+  "incomplete_evidence",
+  "needs_reproduction",
+  "ready_for_peer_review",
 ]);
 const ASSET_CATEGORIES = new Set<AssetCategory>([
   "pii",
@@ -108,6 +117,26 @@ export interface AppOptions {
   dbPath?: string;
   replayTimeoutMs?: number;
   maxReplayResponseBytes?: number;
+  apiToken?: string;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  const normalized = address.toLowerCase().split("%")[0];
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "::ffff:127.0.0.1"
+  );
+}
+
+function tokenMatches(
+  header: string | undefined,
+  expected: string | undefined,
+): boolean {
+  if (!expected || !header?.startsWith("Bearer ")) return false;
+  const supplied = Buffer.from(header.slice(7), "utf8");
+  const configured = Buffer.from(expected, "utf8");
+  return supplied.length === configured.length && timingSafeEqual(supplied, configured);
 }
 
 function defaultIdentities(): IdentityContext[] {
@@ -163,6 +192,9 @@ export function buildApp(options: AppOptions = {}) {
     logger: options.logger ?? true,
     bodyLimit: maxBodyBytes,
   });
+  const apiToken = options.apiToken ?? process.env.SURFACETRACE_API_TOKEN;
+  if (apiToken && apiToken.length < 32)
+    throw new Error("SURFACETRACE_API_TOKEN must be at least 32 characters");
   const persistence = new SqlitePersistence(
     options.dbPath ??
       (process.env.NODE_ENV === "test"
@@ -277,7 +309,15 @@ export function buildApp(options: AppOptions = {}) {
   }
   refreshGraph();
 
-  app.addHook("onRequest", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.url.split("?", 1)[0] === "/health") return;
+    if (apiToken && !tokenMatches(request.headers.authorization, apiToken)) {
+      return reply.status(401).send({
+        error: "Protected API access requires a valid bearer token",
+      });
+    }
+    if (!apiToken && !isLoopbackAddress(request.ip))
+      return reply.status(401).send({ error: "Remote API access is disabled" });
     if (["POST", "PATCH", "DELETE"].includes(request.method))
       requestSnapshots.set(request, structuredClone(state()));
   });
@@ -332,9 +372,6 @@ export function buildApp(options: AppOptions = {}) {
     ok: true,
     service: "surfacetrace-server",
     version: "0.1.0",
-    ledgerTip: ledger.tipHash(),
-    ledgerValid: ledger.verify(),
-    schemaVersion: persistence.schemaVersion(),
   }));
   app.get("/projects", async () => ({
     projects: persistence.listProjects(),
@@ -631,9 +668,23 @@ export function buildApp(options: AppOptions = {}) {
       return reply
         .status(400)
         .send({ error: "Explicit runtime credential material is required" });
+    let validatedHeaders: Record<string, string>;
+    try {
+      validatedHeaders = validateRuntimeCredentialHeaders(
+        headers,
+        request.body.approvedApiKeyHeaderNames,
+      );
+    } catch (error) {
+      return reply.status(400).send({
+        error: error instanceof Error ? error.message : "Credential header rejected",
+      });
+    }
     runtimeCredentials.set(identity.id, {
-      headers: structuredClone(headers),
+      headers: validatedHeaders,
       cookies: structuredClone(cookies),
+      approvedApiKeyHeaderNames: [
+        ...(request.body.approvedApiKeyHeaderNames ?? []),
+      ],
     });
     return {
       identityId: identity.id,
@@ -1004,6 +1055,11 @@ export function buildApp(options: AppOptions = {}) {
       experiments,
       graph: lastGraph,
       evidence: ledger.all(),
+      coverage: buildEvidenceCoverage({
+        observations: lastImport.observations,
+        inputs: lastImport.inputs,
+        hypotheses: lastHypotheses,
+      }),
       scope: projectScope,
     };
   });
@@ -1295,6 +1351,7 @@ export function buildApp(options: AppOptions = {}) {
     Body: {
       status?: ExperimentStatus;
       conclusion?: TesterConclusion | null;
+      structuredConclusion?: Partial<StructuredConclusion> | null;
       notes?: string;
     };
   }>("/experiments/:experimentId", async (request, reply) => {
@@ -1312,14 +1369,39 @@ export function buildApp(options: AppOptions = {}) {
       !TESTER_CONCLUSIONS.has(body.conclusion)
     )
       return reply.status(400).send({ error: "Invalid tester conclusion" });
+    const structured = body.structuredConclusion;
+    if (structured != null) {
+      if (
+        structured.evidenceReadiness !== undefined &&
+        structured.evidenceReadiness !== null &&
+        !EVIDENCE_READINESS.has(structured.evidenceReadiness)
+      )
+        return reply.status(400).send({ error: "Invalid evidence readiness" });
+      if (
+        structured.evidenceReadiness === "ready_for_peer_review" &&
+        !structured.supportingEvidence?.trim()
+      )
+        return reply
+          .status(400)
+          .send({ error: "Peer review readiness requires evidence links" });
+      if (
+        structured.shouldStopTesting === true &&
+        body.status !== undefined &&
+        body.status !== "closed"
+      )
+        return reply
+          .status(400)
+          .send({ error: "Stop decision must close the experiment" });
+    }
     if (
       body.status === undefined &&
       body.conclusion === undefined &&
+      body.structuredConclusion === undefined &&
       body.notes === undefined
     )
       return reply
         .status(400)
-        .send({ error: "Status, conclusion, or notes required" });
+        .send({ error: "Status, conclusion, structured conclusion, or notes required" });
     const evidence = [];
     if (body.status !== undefined && body.status !== experiment.status) {
       experiment.status = body.status;
@@ -1343,6 +1425,66 @@ export function buildApp(options: AppOptions = {}) {
           conclusion: body.conclusion,
         }),
       );
+    }
+    if (structured != null) {
+      const previous = experiment.structuredConclusion ?? null;
+      const next = {
+        whatChanged:
+          structured.whatChanged !== undefined
+            ? redactBody(structured.whatChanged, "text/plain")
+            : previous?.whatChanged ?? null,
+        whatRemainedConstant:
+          structured.whatRemainedConstant !== undefined
+            ? redactBody(structured.whatRemainedConstant, "text/plain")
+            : previous?.whatRemainedConstant ?? null,
+        expectedPolicy:
+          structured.expectedPolicy !== undefined
+            ? redactBody(structured.expectedPolicy, "text/plain")
+            : previous?.expectedPolicy ?? null,
+        supportingEvidence:
+          structured.supportingEvidence !== undefined
+            ? redactBody(structured.supportingEvidence, "text/plain")
+            : previous?.supportingEvidence ?? null,
+        unknowns:
+          structured.unknowns !== undefined
+            ? redactBody(structured.unknowns, "text/plain")
+            : previous?.unknowns ?? null,
+        reproduced:
+          structured.reproduced !== undefined
+            ? structured.reproduced
+            : previous?.reproduced ?? null,
+        realUserDataEncountered:
+          structured.realUserDataEncountered !== undefined
+            ? structured.realUserDataEncountered
+            : previous?.realUserDataEncountered ?? null,
+        shouldStopTesting:
+          structured.shouldStopTesting !== undefined
+            ? structured.shouldStopTesting
+            : previous?.shouldStopTesting ?? null,
+        evidenceReadiness:
+          structured.evidenceReadiness !== undefined
+            ? structured.evidenceReadiness
+            : previous?.evidenceReadiness ?? null,
+      } satisfies StructuredConclusion;
+      experiment.structuredConclusion = next;
+      evidence.push(
+        ledger.append("note", {
+          event: "structured_conclusion_updated",
+          experimentId: experiment.id,
+          readiness: next.evidenceReadiness,
+          stopTesting: next.shouldStopTesting,
+        }),
+      );
+      if (next.shouldStopTesting === true && experiment.status !== "closed") {
+        experiment.status = "closed";
+        evidence.push(
+          ledger.append("note", {
+            event: lifecycleEvent({ status: "closed" }),
+            experimentId: experiment.id,
+            status: "closed",
+          }),
+        );
+      }
     }
     if (body.notes !== undefined) {
       experiment.notes = redactBody(body.notes, "text/plain");
@@ -1476,6 +1618,7 @@ export function buildApp(options: AppOptions = {}) {
       status: "investigating",
       resultObservationId: result.id,
       conclusion: null,
+      structuredConclusion: null,
       notes: redactBody(body.notes?.trim(), "text/plain"),
       evidenceIds: [],
       createdAt,

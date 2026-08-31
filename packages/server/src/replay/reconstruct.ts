@@ -11,10 +11,15 @@ import type {
   IdentityContext,
   Observation,
 } from "@surfacetrace/core";
+import {
+  mergeRuntimeCredentialHeaders,
+  validateOutboundHeaders,
+} from "./credentialHeaders.js";
 
 export interface RuntimeCredential {
   headers: Record<string, string>;
   cookies: Record<string, string>;
+  approvedApiKeyHeaderNames?: string[];
 }
 
 export interface ReconstructedRequest {
@@ -37,7 +42,7 @@ export function reconstructRequest(
 ): ReconstructedRequest {
   const kind = assertOneVariable(mutation);
   const url = new URL(baseline.url);
-  const headers = replayableHeaders(baseline.http.request.headers);
+  let headers = replayableHeaders(baseline.http.request.headers);
   let body = baseline.http.request.body;
   let replayIdentityId = baseline.identityId;
 
@@ -110,7 +115,11 @@ export function reconstructRequest(
       throw new Error(
         "Replay credentials are unavailable for the selected identity",
       );
-    Object.assign(headers, material.headers);
+    headers = mergeRuntimeCredentialHeaders(
+      headers,
+      material.headers,
+      material.approvedApiKeyHeaderNames,
+    );
     const cookie = Object.entries(material.cookies)
       .map(([name, value]) => `${name}=${value}`)
       .join("; ");
@@ -120,6 +129,7 @@ export function reconstructRequest(
     throw new Error(
       "Replay unavailable because the baseline contains redacted header material",
     );
+  validateOutboundHeaders(headers);
   if (
     url.toString().includes(encodeURIComponent(REDACTED)) ||
     url.toString().includes(REDACTED)

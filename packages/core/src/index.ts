@@ -35,6 +35,11 @@ export type { DeepDiffLimits } from "./diff/compare.js";
 export { canonicalize, sha256, hashPayload } from "./evidence/hash.js";
 export { EvidenceLedger } from "./evidence/ledger.js";
 export {
+  buildEvidenceCoverage,
+  type EvidenceCoverageInput,
+  type EvidenceCoverageReport,
+} from "./evidenceCoverage.js";
+export {
   isRequestInScope,
   evaluateRedirectTarget,
   RequestBudget,

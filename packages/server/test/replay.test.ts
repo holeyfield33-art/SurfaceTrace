@@ -7,6 +7,7 @@ import type { IdentityContext, Observation } from "@surfacetrace/core";
 import { buildApp } from "../src/app.js";
 import { executeReplayRequest } from "../src/replay/httpClient.js";
 import { reconstructRequest } from "../src/replay/reconstruct.js";
+import { validateRuntimeCredentialHeaders } from "../src/replay/credentialHeaders.js";
 
 const identities: IdentityContext[] = [
   {
@@ -117,6 +118,59 @@ describe("active replay reconstruction", () => {
     expect(result.preview).not.toContain("runtime-only-secret");
     expect(result.preview).not.toContain("runtime-cookie");
   });
+
+  test("enforces one canonical runtime credential header policy", () => {
+    const rejected = [
+      "Host", "hOsT", "Content-Length", "Transfer-Encoding", "Connection",
+      "Upgrade", "Keep-Alive", "Trailer", "TE", "Proxy-Authorization",
+      "Proxy-Authenticate", "Forwarded", "X-Forwarded-For",
+      "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "Via",
+      ":authority", "bad header", "bad\rname",
+    ];
+    for (const name of rejected)
+      expect(() =>
+        validateRuntimeCredentialHeaders({ [name]: "safe" }, [name]),
+      ).toThrow(/rejected/i);
+    expect(() =>
+      validateRuntimeCredentialHeaders({ Authorization: "bad\r\nvalue" }),
+    ).toThrow(/Authorization/);
+    expect(() =>
+      validateRuntimeCredentialHeaders({
+        Authorization: "Bearer one",
+        authorization: "Bearer two",
+      }),
+    ).toThrow(/Duplicate/);
+    expect(
+      validateRuntimeCredentialHeaders({ Authorization: "Bearer safe" }),
+    ).toEqual({ Authorization: "Bearer safe" });
+    expect(
+      validateRuntimeCredentialHeaders(
+        { "X-Review-Key": "runtime-secret" },
+        ["X-Review-Key"],
+      ),
+    ).toEqual({ "X-Review-Key": "runtime-secret" });
+  });
+
+  test("rejects credential overrides of protected reconstructed headers", () => {
+    expect(() =>
+      reconstructRequest(
+        observation({ identityId: "account-a" }),
+        { identity: { fromRole: "user", toRole: "admin" } },
+        identities,
+        new Map([
+          [
+            "privileged",
+            {
+              headers: { "Content-Type": "credential-value" },
+              cookies: {},
+              approvedApiKeyHeaderNames: ["Content-Type"],
+            },
+          ],
+        ]),
+        "privileged",
+      ),
+    ).toThrow(/cannot override request header/i);
+  });
 });
 
 describe("dedicated replay HTTP client", () => {
@@ -143,17 +197,20 @@ describe("dedicated replay HTTP client", () => {
       response.setHeader("Set-Cookie", "session=response-secret");
       response.end('{"ok":true,"password":"response-secret"}');
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
   });
 
   test("does not follow redirects or retry", async () => {
@@ -195,6 +252,49 @@ describe("dedicated replay HTTP client", () => {
     expect(JSON.stringify(safe)).not.toContain("response-secret");
     expect(safe.body).toContain("[REDACTED]");
   });
+
+  test("revalidates dangerous headers before any network execution", async () => {
+    const before = requests;
+    await expect(
+      executeReplayRequest({
+        method: "GET",
+        url: `${baseUrl}/safe`,
+        headers: { Host: "other.test" },
+        body: null,
+      }),
+    ).rejects.toThrow(/Host/);
+    expect(requests).toBe(before);
+  });
+
+  test("rejects unsafe credentials at registration without returning values", async () => {
+    const app = buildApp({ logger: false });
+    try {
+      const unsafe = await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: { headers: { "X-Forwarded-Host": "secret.test" }, cookies: {} },
+      });
+      expect(unsafe.statusCode).toBe(400);
+      expect(unsafe.body).not.toContain("secret.test");
+      const safe = await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: {
+          headers: { "X-Review-Key": "runtime-only-secret" },
+          cookies: {},
+          approvedApiKeyHeaderNames: ["X-Review-Key"],
+        },
+      });
+      expect(safe.statusCode).toBe(200);
+      expect(safe.body).not.toContain("runtime-only-secret");
+      expect(safe.json()).toMatchObject({
+        persisted: false,
+        headerNames: ["X-Review-Key"],
+      });
+    } finally {
+      await app.close();
+    }
+  }, 15_000);
 
   test("requires preview, approval, one-time send, and restores replay after restart", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-replay-"));

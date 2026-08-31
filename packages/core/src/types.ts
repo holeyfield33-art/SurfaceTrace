@@ -70,6 +70,11 @@ export type TesterConclusion =
   | "potential_security_issue"
   | "not_reproducible";
 
+export type EvidenceReadiness =
+  | "incomplete_evidence"
+  | "needs_reproduction"
+  | "ready_for_peer_review";
+
 export type NodeKind =
   | "endpoint"
   | "input"
@@ -307,6 +312,7 @@ export interface Experiment {
   status: ExperimentStatus;
   resultObservationId: string | null;
   conclusion: TesterConclusion | null;
+  structuredConclusion?: StructuredConclusion | null;
   notes: string | null;
   evidenceIds: string[];
   createdAt: string;
@@ -324,6 +330,18 @@ export interface Experiment {
     redirectLocation: string | null;
     redirectDecision: ScopeDecision | null;
   };
+}
+
+export interface StructuredConclusion {
+  whatChanged: string | null;
+  whatRemainedConstant: string | null;
+  expectedPolicy: string | null;
+  supportingEvidence: string | null;
+  unknowns: string | null;
+  reproduced: boolean | null;
+  realUserDataEncountered: boolean | null;
+  shouldStopTesting: boolean | null;
+  evidenceReadiness: EvidenceReadiness | null;
 }
 
 export interface DiffCard {

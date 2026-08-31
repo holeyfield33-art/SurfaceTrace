@@ -63,6 +63,26 @@ known baseline
 
 The preview token is single-use. Canceling, invalid mutations, denied scope, exhausted rate, or active stop conditions produce zero outbound requests. SurfaceTrace never retries automatically, follows redirects automatically, or starts another experiment. A redirect is only a proposed target and requires a new approval.
 
+## Controlled Replay Lab
+
+```text
+separate localhost lab
+-> deterministic synthetic routes
+-> one controlled mutation practice
+-> preview scope and behavior
+-> no production integration
+```
+
+Use the standalone `examples/controlled-replay-lab/` application when you want to practice replay reasoning without touching the SurfaceTrace server. It binds to `127.0.0.1` by default, serves synthetic routes only, and refuses non-loopback binding unless you set an explicit unsafe override.
+
+The lab exists to teach the replay boundary:
+
+- baseline object versus controlled comparison object
+- redirect behavior without automatic following
+- slow responses without retry loops
+- bounded large responses with truncation
+- the difference between preview, approval, and send in a sandbox
+
 ## Identity Testing
 
 ### Account A / Account B
@@ -109,3 +129,7 @@ These signals do not establish SSRF. SurfaceTrace does not automatically probe d
 - SurfaceTrace: organize investigation context, threat mapping, controlled replay, deterministic comparison, conclusions, and evidence.
 
 SurfaceTrace is not positioned as a Burp Suite or Caido replacement.
+
+## Three-Agent Security Teams
+
+Use `npm run team:pentest` for boundary-focused verification or `npm run team:redteam` for adversarial assumption review. Both commands create three independent, scoped prompt packets under ignored `security-runs/`; they do not invoke a model or send traffic. Active mode is restricted to an explicit loopback target. After the three receipts are saved, `npm run team:gate -- <run-dir>` applies the deterministic PASS/BLOCK/FREEZE gate described in `security-teams/README.md`.
