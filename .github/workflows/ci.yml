@@ -63,8 +63,18 @@ jobs:
         run: docker compose up --detach --build
       - name: Wait for the container health gate
         run: |
+          container_id="$(docker compose ps --all -q surfacetrace)"
+          if [ -z "$container_id" ]; then
+            docker compose logs
+            exit 1
+          fi
           for attempt in {1..36}; do
-            if [ "$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q surfacetrace)")" = "healthy" ]; then
+            state="$(docker inspect --format='{{.State.Status}}' "$container_id")"
+            if [ "$state" != "running" ]; then
+              docker compose logs
+              exit 1
+            fi
+            if [ "$(docker inspect --format='{{.State.Health.Status}}' "$container_id")" = "healthy" ]; then
               exit 0
             fi
             sleep 5

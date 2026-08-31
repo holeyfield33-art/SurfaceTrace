@@ -32,6 +32,14 @@ test("normal development configuration is loopback-only", async () => {
     composeSource,
     /^\s*-\s*["']127\.0\.0\.1:(?:8787|4040):/m,
   );
+  for (const workspace of ["core", "server", "web"]) {
+    assert.match(
+      composeSource,
+      new RegExp(
+        `surfacetrace-${workspace}-node-modules:/workspace/SurfaceTrace/packages/${workspace}/node_modules`,
+      ),
+    );
+  }
 
   const loaded = await loadConfigFromFile(
     { command: "serve", mode: "test" },

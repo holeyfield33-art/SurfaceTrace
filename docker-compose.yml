@@ -9,6 +9,9 @@ services:
     volumes:
       - .:/workspace/SurfaceTrace
       - surfacetrace-node-modules:/workspace/SurfaceTrace/node_modules
+      - surfacetrace-core-node-modules:/workspace/SurfaceTrace/packages/core/node_modules
+      - surfacetrace-server-node-modules:/workspace/SurfaceTrace/packages/server/node_modules
+      - surfacetrace-web-node-modules:/workspace/SurfaceTrace/packages/web/node_modules
       - surfacetrace-data:/workspace/SurfaceTrace/data
     ports:
       - "127.0.0.1:5173:5173"
@@ -38,4 +41,7 @@ services:
       npm_config_audit: "false"
 volumes:
   surfacetrace-node-modules:
+  surfacetrace-core-node-modules:
+  surfacetrace-server-node-modules:
+  surfacetrace-web-node-modules:
   surfacetrace-data:
