@@ -32,13 +32,32 @@ import type {
 import type { HarFile } from "../src/har/types.js";
 
 describe("redaction", () => {
-  test.each(["Authorization", "Cookie", "Set-Cookie", "X-API-Key"])(
+  test.each([
+    "Authorization",
+    "Cookie",
+    "Set-Cookie",
+    "X-API-Key",
+    "X-Amz-Security-Token",
+    "X-Aws-Ec2-Metadata-Token",
+    "X-Goog-Api-Key",
+  ])(
     "redacts %s",
     (name) => {
       expect(redactHeaders({ [name]: "private" })[name]).toBe(REDACTED);
     },
   );
-  test.each(["token", "access_token", "refresh_token", "password", "secret"])(
+  test.each([
+    "token",
+    "access_token",
+    "refresh_token",
+    "password",
+    "secret",
+    "code",
+    "client_secret",
+    "credential",
+    "SAMLResponse",
+    "signature",
+  ])(
     "redacts %s",
     (name) => {
       expect(redactQueryParams({ [name]: "private" })[name]).toBe(REDACTED);
@@ -57,6 +76,27 @@ describe("redaction", () => {
     ).toBe(
       "https://example.test/account?access_token=%5BREDACTED%5D&view=full",
     );
+  });
+  test("sanitizes URL userinfo, OAuth codes, and token fragments", () => {
+    const safe = sanitizeUrl(
+      "https://private-user:private-password@example.test/callback?code=oauth-code&view=full#access_token=fragment-token&state=visible",
+    );
+    expect(safe).not.toMatch(
+      /private-user|private-password|oauth-code|fragment-token/,
+    );
+    expect(safe).toContain("%5BREDACTED%5D");
+    expect(safe).toContain("view=full");
+    expect(safe).toContain("state=visible");
+  });
+  test("sanitizes secrets embedded in URL-valued headers", () => {
+    const headers = redactHeaders({
+      Location: "https://example.test/callback?code=location-code",
+      Referer: "https://user:pass@example.test/start?token=referer-token",
+    });
+    expect(JSON.stringify(headers)).not.toMatch(
+      /location-code|referer-token|user|pass/,
+    );
+    expect(headers.Location).toContain("%5BREDACTED%5D");
   });
   test("sample HAR never normalizes the query secret", () => {
     const raw = readFileSync("../../fixtures/sample.har", "utf8");
@@ -133,6 +173,94 @@ describe("redaction", () => {
       ),
     ).toBe("name=Ada&api_key=%5BREDACTED%5D");
     expect(redactBody("token=private", "text/plain")).toBe("token=[REDACTED]");
+  });
+  test("redacts credential aliases and opaque tokens in structured text", () => {
+    const safe = redactBody(
+      JSON.stringify({
+        credential: "credential-secret",
+        clientSecret: "client-secret",
+        nested: { authorizationCode: "authorization-code" },
+        message: "Bearer opaque-bearer-secret",
+      }),
+      "application/json",
+    );
+    expect(safe).not.toMatch(
+      /credential-secret|client-secret|authorization-code|opaque-bearer-secret/,
+    );
+    expect(safe?.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+  test("decodes and redacts base64 HAR bodies before normalization", () => {
+    const requestSecret = "base64-request-credential";
+    const responseSecret = "base64-response-token";
+    const har = fixture("https://example.test/base64");
+    const entry = har.log.entries[0]!;
+    entry.request.method = "POST";
+    entry.request.headers = [
+      { name: "Content-Type", value: "application/json" },
+    ];
+    entry.request.postData = {
+      mimeType: "application/json",
+      encoding: "base64",
+      text: Buffer.from(
+        JSON.stringify({ credential: requestSecret, action: "review" }),
+      ).toString("base64"),
+    };
+    entry.response.content = {
+      size: 64,
+      mimeType: "application/json",
+      encoding: "base64",
+      text: Buffer.from(
+        JSON.stringify({ access_token: responseSecret, ok: true }),
+      ).toString("base64"),
+    };
+    const encodedRequest = entry.request.postData.text!;
+    const encodedResponse = entry.response.content.text!;
+    const observation = importHar(har).observations[0]!;
+    const serialized = JSON.stringify(observation);
+    expect(serialized).not.toContain(requestSecret);
+    expect(serialized).not.toContain(responseSecret);
+    expect(serialized).not.toContain(encodedRequest);
+    expect(serialized).not.toContain(encodedResponse);
+    expect(observation.http.request.body).toContain(REDACTED);
+    expect(observation.http.response.body).toContain(REDACTED);
+    expect(observation.http.request.body).toContain("review");
+    expect(
+      observation.parsedInputs.find((input) => input.name === "credential"),
+    ).toMatchObject({ location: "body-json", sensitive: true });
+  });
+  test("omits binary, multipart, and malformed encoded bodies", () => {
+    const binarySecret = Buffer.from("token=binary-secret").toString("base64");
+    const binary = fixture("https://example.test/binary");
+    binary.log.entries[0]!.response.content = {
+      size: 20,
+      mimeType: "image/png",
+      encoding: "base64",
+      text: binarySecret,
+    };
+    const binaryBody = importHar(binary).observations[0]!.http.response.body;
+    expect(binaryBody).toContain("binary body omitted");
+    expect(binaryBody).not.toContain(binarySecret);
+
+    const multipart = fixture("https://example.test/upload");
+    multipart.log.entries[0]!.request.method = "POST";
+    multipart.log.entries[0]!.request.postData = {
+      mimeType: "multipart/form-data; boundary=test",
+      text: "--test\r\ncredential=multipart-secret\r\n--test--",
+    };
+    expect(
+      importHar(multipart).observations[0]!.http.request.body,
+    ).toBe("[multipart body omitted]");
+
+    const malformed = fixture("https://example.test/malformed");
+    malformed.log.entries[0]!.response.content = {
+      size: 8,
+      mimeType: "text/plain",
+      encoding: "base64",
+      text: "not*valid*base64",
+    };
+    expect(
+      importHar(malformed).observations[0]!.http.response.body,
+    ).toContain("invalid base64 body omitted");
   });
 });
 
@@ -976,6 +1104,23 @@ describe("runtime scope decision", () => {
     expect(
       decide("https://example.test/api/public/%252e%252e/admin/users"),
     ).toMatchObject({ allowed: false, reasonCode: "PATH_EXCLUDED" });
+  });
+
+  test("deeply encoded traversal cannot bypass an excluded path", () => {
+    expect(
+      decide(
+        "https://example.test/api/public/%2525252e%2525252e/admin/users",
+      ),
+    ).toMatchObject({ allowed: false, reasonCode: "PATH_EXCLUDED" });
+  });
+
+  test("excessive encoding depth fails closed", () => {
+    let traversal = "%2e%2e";
+    for (let pass = 0; pass < 20; pass += 1)
+      traversal = traversal.replaceAll("%", "%25");
+    expect(
+      decide(`https://example.test/api/public/${traversal}/admin/users`),
+    ).toMatchObject({ allowed: false, reasonCode: "MALFORMED_URL" });
   });
 
   test("re-evaluates every redirect target independently", () => {

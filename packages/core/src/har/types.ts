@@ -64,6 +64,7 @@ export interface HarCookie {
 export interface HarPostData {
   mimeType: string;
   text?: string;
+  encoding?: string;
   params?: { name: string; value?: string }[];
 }
 
