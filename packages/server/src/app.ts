@@ -309,14 +309,14 @@ export function buildApp(options: AppOptions = {}) {
   refreshGraph();
 
   app.addHook("onRequest", async (request, reply) => {
-    if (
-      !isLoopbackAddress(request.ip) &&
-      !tokenMatches(request.headers.authorization, apiToken)
-    ) {
+    if (request.url.split("?", 1)[0] === "/health") return;
+    if (apiToken && !tokenMatches(request.headers.authorization, apiToken)) {
       return reply.status(401).send({
-        error: "Non-loopback API access requires a valid bearer token",
+        error: "Protected API access requires a valid bearer token",
       });
     }
+    if (!apiToken && !isLoopbackAddress(request.ip))
+      return reply.status(401).send({ error: "Remote API access is disabled" });
     if (["POST", "PATCH", "DELETE"].includes(request.method))
       requestSnapshots.set(request, structuredClone(state()));
   });
@@ -371,9 +371,6 @@ export function buildApp(options: AppOptions = {}) {
     ok: true,
     service: "surfacetrace-server",
     version: "0.1.0",
-    ledgerTip: ledger.tipHash(),
-    ledgerValid: ledger.verify(),
-    schemaVersion: persistence.schemaVersion(),
   }));
   app.get("/projects", async () => ({
     projects: persistence.listProjects(),

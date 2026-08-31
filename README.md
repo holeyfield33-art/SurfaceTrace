@@ -52,9 +52,9 @@ On the current SurfaceTrace Windows workstation, the equivalent PowerShell selec
 
 Open `http://localhost:5173`. API health is available at `http://127.0.0.1:8787/health`.
 
-SurfaceTrace is a single-user local tool, not a multi-tenant service. The API binds to loopback by default, and Docker publishes only the web proxy on host loopback. If an operator deliberately configures a non-loopback `HOST`, startup requires `SURFACETRACE_API_TOKEN` with at least 32 characters and every non-loopback API request must send it as a bearer token. Project, observation, identity, and evidence state all belong to that one authenticated local workspace; do not deploy this architecture as a shared multi-user service.
+SurfaceTrace is a single-user local tool, not a multi-tenant service. The API and Vite UI bind to loopback by default, and Docker publishes only the web proxy on host loopback. If `SURFACETRACE_API_TOKEN` is configured, every protected API request requires it, including requests arriving over loopback; the Vite development proxy reads the token at runtime and adds it server-side without compiling it into browser JavaScript. Project, observation, identity, and evidence state all belong to one local operator workspace; non-loopback UI exposure and shared multi-user deployment are unsupported.
 
-In a normal local Windows workspace, these are direct local listeners and may not appear in VS Code's **Ports** forwarding panel. That panel is mainly relevant when VS Code is attached to a Dev Container, WSL, SSH host, or Codespace. Verify local startup by keeping both npm terminals running, opening the URLs directly, or running `Get-NetTCPConnection -LocalPort 5173,8787 -State Listen` in PowerShell. If a start command exits after the Node-version check, no listener will be created; select Node 22 and run the command again.
+In a normal local Windows workspace, these are direct loopback listeners and may not appear in VS Code's **Ports** forwarding panel. That panel is mainly relevant when VS Code is attached to a Dev Container, WSL, SSH host, or Codespace. Verify that both `LocalAddress` values are `127.0.0.1` with `Get-NetTCPConnection -LocalPort 5173,8787 -State Listen`. If a start command exits after the Node-version check, no listener will be created; select Node 22 and run the command again.
 
 ## Course and Run Manual
 

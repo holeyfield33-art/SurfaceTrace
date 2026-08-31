@@ -6,7 +6,7 @@ import { buildApp } from "../src/app.js";
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
 
 describe("local API trust boundary", () => {
-  test("requires a strong bearer token outside loopback", async () => {
+  test("requires a strong bearer token on every protected hop when configured", async () => {
     expect(() => buildApp({ logger: false, apiToken: "too-short" })).toThrow(
       "at least 32 characters",
     );
@@ -18,6 +18,22 @@ describe("local API trust boundary", () => {
       remoteAddress: "192.0.2.10",
     });
     expect(denied.statusCode).toBe(401);
+    const deniedLoopback = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "127.0.0.1",
+    });
+    expect(deniedLoopback.statusCode).toBe(401);
+    const forgedForwardingHeaders = await app.inject({
+      method: "GET",
+      url: "/projects",
+      remoteAddress: "192.0.2.10",
+      headers: {
+        "x-forwarded-for": "127.0.0.1",
+        forwarded: "for=127.0.0.1",
+      },
+    });
+    expect(forgedForwardingHeaders.statusCode).toBe(401);
     const allowed = await app.inject({
       method: "GET",
       url: "/projects",
@@ -25,6 +41,40 @@ describe("local API trust boundary", () => {
       headers: { authorization: `Bearer ${apiToken}` },
     });
     expect(allowed.statusCode).toBe(200);
+    const health = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress: "192.0.2.10",
+    });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({
+      ok: true,
+      service: "surfacetrace-server",
+      version: "0.1.0",
+    });
+    await app.close();
+  });
+
+  test("disables remote protected access when no authentication is configured", async () => {
+    const app = buildApp({ logger: false });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/projects",
+          remoteAddress: "192.0.2.10",
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/projects",
+          remoteAddress: "127.0.0.1",
+        })
+      ).statusCode,
+    ).toBe(200);
     await app.close();
   });
 
@@ -185,13 +235,15 @@ describe("local API trust boundary", () => {
   test("creates a versioned local database and default project", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));
     const dbPath = join(directory, "surfacetrace.db");
+    let app: ReturnType<typeof buildApp> | null = null;
     try {
-      const app = buildApp({ logger: false, dbPath });
+      app = buildApp({ logger: false, dbPath });
       expect(
         (await app.inject({ method: "GET", url: "/health" })).json(),
-      ).toMatchObject({
-        schemaVersion: 2,
-        ledgerValid: true,
+      ).toEqual({
+        ok: true,
+        service: "surfacetrace-server",
+        version: "0.1.0",
       });
       const projects = (
         await app.inject({ method: "GET", url: "/projects" })
@@ -207,10 +259,12 @@ describe("local API trust boundary", () => {
       expect(created.statusCode).toBe(201);
       expect(created.json().name).toBe("Persistence Review");
       await app.close();
+      app = null;
       expect(readFileSync(dbPath).subarray(0, 16).toString()).toBe(
         "SQLite format 3\u0000",
       );
     } finally {
+      if (app) await app.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
