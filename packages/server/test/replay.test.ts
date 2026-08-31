@@ -268,30 +268,33 @@ describe("dedicated replay HTTP client", () => {
 
   test("rejects unsafe credentials at registration without returning values", async () => {
     const app = buildApp({ logger: false });
-    const unsafe = await app.inject({
-      method: "PUT",
-      url: "/replay/credentials/privileged",
-      payload: { headers: { "X-Forwarded-Host": "secret.test" }, cookies: {} },
-    });
-    expect(unsafe.statusCode).toBe(400);
-    expect(unsafe.body).not.toContain("secret.test");
-    const safe = await app.inject({
-      method: "PUT",
-      url: "/replay/credentials/privileged",
-      payload: {
-        headers: { "X-Review-Key": "runtime-only-secret" },
-        cookies: {},
-        approvedApiKeyHeaderNames: ["X-Review-Key"],
-      },
-    });
-    expect(safe.statusCode).toBe(200);
-    expect(safe.body).not.toContain("runtime-only-secret");
-    expect(safe.json()).toMatchObject({
-      persisted: false,
-      headerNames: ["X-Review-Key"],
-    });
-    await app.close();
-  });
+    try {
+      const unsafe = await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: { headers: { "X-Forwarded-Host": "secret.test" }, cookies: {} },
+      });
+      expect(unsafe.statusCode).toBe(400);
+      expect(unsafe.body).not.toContain("secret.test");
+      const safe = await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: {
+          headers: { "X-Review-Key": "runtime-only-secret" },
+          cookies: {},
+          approvedApiKeyHeaderNames: ["X-Review-Key"],
+        },
+      });
+      expect(safe.statusCode).toBe(200);
+      expect(safe.body).not.toContain("runtime-only-secret");
+      expect(safe.json()).toMatchObject({
+        persisted: false,
+        headerNames: ["X-Review-Key"],
+      });
+    } finally {
+      await app.close();
+    }
+  }, 15_000);
 
   test("requires preview, approval, one-time send, and restores replay after restart", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-replay-"));
