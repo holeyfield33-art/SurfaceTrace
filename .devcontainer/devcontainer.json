@@ -1,0 +1,17 @@
+{
+  "name": "SurfaceTrace",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "surfacetrace",
+  "workspaceFolder": "/workspace/SurfaceTrace",
+  "overrideCommand": false,
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  },
+  "postCreateCommand": "npm install"
+}

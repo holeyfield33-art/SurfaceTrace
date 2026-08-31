@@ -20,11 +20,13 @@ export function assertOneVariable(mutation: ExperimentMutation): MutationKind {
   if (mutation.identity !== undefined) set.push("identity");
 
   if (set.length === 0) {
-    throw new Error("Experiment must change exactly one variable; none provided");
+    throw new Error(
+      "Experiment must change exactly one variable; none provided",
+    );
   }
   if (set.length > 1) {
     throw new Error(
-      `Experiment must change exactly one variable; got: ${set.join(", ")}`
+      `Experiment must change exactly one variable; got: ${set.join(", ")}`,
     );
   }
   return set[0]!;

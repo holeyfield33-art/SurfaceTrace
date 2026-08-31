@@ -1,239 +1,72 @@
 # SurfaceTrace
 
-**Human-in-the-loop attack-surface and threat-mapping cockpit.**
+SurfaceTrace is a human-in-the-loop attack-surface investigation cockpit for authorized web security testing. It turns captured HTTP traffic into redacted observations, normalized endpoints and inputs, identity and threat context, one-variable experiments, deterministic diffs, and hash-linked evidence. It supports passive imported comparisons and one-request-at-a-time active replay with fail-closed scope checks and explicit human approval.
 
-Browse an authorized application normally. Get a graph of endpoints, inputs, identities, sensitive data paths, trust boundaries, hypotheses, experiments, and evidence.
+## Who It Is For
 
-> This is **not** another vulnerability scanner.  
-> It is a disciplined workflow tool that turns captured traffic into a living threat model and forces one-variable-at-a-time testing with reproducible evidence.
+SurfaceTrace is for learners and testers who want a structured method for understanding web traffic, reviewing access-control and trust questions, comparing one controlled change, and keeping a reproducible investigation notebook. It complements browser DevTools, Burp Suite, and Caido; it is not a scanner or proxy replacement.
 
----
+> Use SurfaceTrace only with systems you own or have explicit permission to test. Missing active scope means no execution. The product has no crawler, bulk replay, automatic retries, automatic redirects, autonomous exploitation, or automatic vulnerability verdicts.
 
-## Core Promise
+## Quick Start
 
-```
-Browser action
-  → Endpoint
-    → Request inputs
-      → Identity/session context
-        → Backend/service
-          → Data asset
-            → Response/output
-
-Threat hypothesis
-  → One controlled mutation
-    → Evidence record
-      → Result: same / different / needs review
-```
-
-SurfaceTrace preserves the full chain:
-
-**observed request → mapped trust boundary → threat hypothesis → one-variable experiment → response diff → evidence**
-
----
-
-## Why This Exists
-
-Existing tools give you pieces:
-
-| Tool              | Strength                          | Gap                                      |
-|-------------------|-----------------------------------|------------------------------------------|
-| Caido / Burp      | Traffic capture, history, sitemap | No threat model or guided experiments    |
-| OWASP Threat Dragon | Data-flow diagrams + STRIDE     | Disconnected from live traffic           |
-| ZAP               | Repeatable automated scans        | Not human-in-the-loop threat mapping     |
-
-SurfaceTrace sits **above** capture tools. It turns passive history into an interactive attack-surface graph and walks the tester through disciplined review.
-
----
-
-## Features (MVP Roadmap)
-
-### 1. Scoped Target
-- Explicit authorization confirmation
-- Allowed domains / paths
-- Test accounts & roles
-- Rate limits and safe-method policy
-- Out-of-scope exclusions and stop conditions
-
-### 2. Traffic Ingestion
-- HAR import (primary)
-- Future: Caido / Burp / mitmproxy adapters
-- Immediate secret redaction
-
-### 3. Attack Surface Graph
-Node types:
-- **Endpoint** — method, host, path template, status distribution, auth requirement
-- **Input** — query, JSON field, form field, header, cookie, path segment
-- **Identity context** — anonymous / user / admin / session state
-- **Asset** — PII, payment data, API keys, internal IDs, documents
-- **Trust boundary** — browser↔API, public↔authenticated, user↔admin, app↔third-party
-- **Observation** — redacted request/response metadata
-- **Hypothesis** — defensive test questions
-- **Experiment** — single approved mutation from baseline
-- **Finding candidate** — reproducible behavior + evidence
-
-Visual language:
-- Blue = components / endpoints
-- Purple = identities & auth boundaries
-- Yellow = user-controlled inputs
-- Red = sensitive assets / high-impact actions
-- Orange edges = external integrations / admin transitions
-- Gray edges = observed traffic
-- Dashed = inferred (needs confirmation)
-
-### 4. Threat Mapping (the centerpiece)
-- Zoomable graph canvas
-- STRIDE-inspired review questions generated from observed signals
-- Priority scoring focused on *review urgency*, not fake exploitability:
-
-```
-Priority = Asset sensitivity
-         + Privilege boundary
-         + Exposure
-         + Input control
-         + Change signal
-         - Observed mitigation
-```
-
-### 5. One-Variable Discipline
-When you open a captured request the UI locks the baseline and forces you to declare:
-
-> **What single thing are you changing?**
-
-Only one approved category of mutation is allowed. Everything else stays identical. The system records the exact delta and compares responses deterministically.
-
-### 6. Diff & Evidence Ledger
-- Status, length, headers, redirects, JSON shape diffs
-- Field-level additions / removals / type changes
-- Append-only, hash-linked evidence records (SHA-256 over canonicalized redacted data)
-- Exportable markdown / JSON evidence packages
-
----
-
-## Architecture (v1 — local-first)
-
-| Component            | Responsibility                                      |
-|----------------------|-----------------------------------------------------|
-| Capture importer     | HAR (later proxy exports); redact secrets           |
-| Normalizer           | Route templates, inputs, response metadata, auth    |
-| Graph engine         | Nodes, edges, clustering of parameterized routes    |
-| Threat mapper        | Trust boundaries, assets, STRIDE prompts            |
-| Experiment runner    | Clone baseline, one mutation, scope/rate enforcement|
-| Diff engine          | Deterministic baseline vs experiment comparison     |
-| Evidence ledger      | Hash-linked, append-only observations & notes       |
-| Guidance layer       | Next *review step* suggestions (advisory only)      |
-| Report generator     | Redacted evidence packages                          |
-
-**Monorepo layout**
-
-```
-packages/
-  core/     # pure domain logic (HAR, graph, threat, experiment, diff, evidence)
-  server/   # Fastify local API
-  web/      # React + Vite UI
-fixtures/   # sample HARs
-docs/       # workflow + architecture
-```
-
-**Tech**
-- Frontend: React + TypeScript + Vite (+ React Flow next)
-- Backend: Node.js / Fastify (local)
-- Storage: in-memory for scaffold; SQLite next
-- Import: HAR first
-- Evidence: SHA-256 over canonicalized records
-- AI: optional and advisory only — never owns redaction, scope, rate limits, or diffs
-
----
-
-## Getting Started
-
-**Requirements:** Node.js ≥ 20
+Use Node 22 as specified by `.nvmrc`. SurfaceTrace enforces Node 22 because the SQLite adapter uses a native binary that must match the Node version used during installation.
 
 ```bash
-git clone https://github.com/holeyfield33-art/SurfaceTrace.git
-cd SurfaceTrace
 npm install
+npm test
+npm run typecheck
+npm run build
+```
 
-# terminal 1 — API (http://127.0.0.1:8787)
+- `npm install` installs the root and workspace dependencies recorded by the repository. Success means npm exits without an installation error.
+- `npm test` runs the core, server, and web test suites. Use it to confirm behavior before starting an investigation.
+- `npm run typecheck` asks TypeScript to validate all workspaces without changing source files.
+- `npm run build` compiles the server/core packages and creates the web production bundle. A completed Vite build is the final success signal.
+
+Start the API and web UI in separate terminals:
+
+```bash
 npm run dev
-
-# terminal 2 — UI (http://127.0.0.1:5173)
 npm run dev:web
 ```
 
-Import `fixtures/sample.har` from the web UI, or:
+`npm run dev` starts Fastify on port `8787`; keep that terminal open. In a second terminal, `npm run dev:web` starts Vite on port `5173` and proxies browser API calls to Fastify. Stop either process with `Ctrl+C` in its terminal.
+
+If all three server test suites fail with `NODE_MODULE_VERSION` or `better_sqlite3.node`, your terminal is using a different Node version from the one that installed dependencies. Run `node --version`; it must report Node 22. If you use a Node version manager, select the supported runtime and repair the native installation with:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8787/import/har \
-  -H 'Content-Type: application/json' \
-  -d @<(jq -n --rawfile h fixtures/sample.har '{har:$h}')
+nvm use 22
+node --version
+npm install
+npm test
 ```
 
-Useful endpoints:
+On the current SurfaceTrace Windows workstation, the equivalent PowerShell selection is `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`. This fallback is machine-specific; other contributors should use their own Node manager or Node 22 installation. `npm install` ensures native dependencies match the selected runtime, and `npm test` confirms the repair. Do not rebuild dependencies under Node 24 and then return to Node 22; switching runtimes recreates the same native ABI mismatch.
 
-| Method | Path | Purpose |
-|--------|------|--------|
-| GET | `/health` | Liveness + ledger tip |
-| POST | `/import/har` | Body `{ "har": "<string>" }` |
-| GET | `/endpoints` | Normalized endpoint inventory |
-| GET | `/graph` | Nodes + edges |
-| GET | `/hypotheses` | Generated review questions |
-| GET | `/evidence` | Hash-linked ledger |
+Open `http://localhost:5173`. API health is available at `http://127.0.0.1:8787/health`.
 
----
+In a normal local Windows workspace, these are direct local listeners and may not appear in VS Code's **Ports** forwarding panel. That panel is mainly relevant when VS Code is attached to a Dev Container, WSL, SSH host, or Codespace. Verify local startup by keeping both npm terminals running, opening the URLs directly, or running `Get-NetTCPConnection -LocalPort 5173,8787 -State Listen` in PowerShell. If a start command exits after the Node-version check, no listener will be created; select Node 22 and run the command again.
 
-## Build Order
+## Course and Run Manual
 
-1. **HAR import → endpoint inventory** ✅ scaffolded  
-   Route normalization, inputs, responses, auth metadata, redaction.
+**[Full beginner course and run manual -> docs/COURSE_AND_RUN_MANUAL.md](docs/COURSE_AND_RUN_MANUAL.md)**
 
-2. **Interactive graph**  
-   Endpoint → input → asset relationships + manual trust-boundary annotations.
+The manual covers installation, a complete guided session using `fixtures/sample.har`, HTTP and security-review concepts, passive comparison, bounded active replay, ethics, troubleshooting, API routes, and every fixture entry.
 
-3. **Threat cards**  
-   STRIDE-inspired questions, checklist state, evidence links, mitigation notes.
+## Repository Layout
 
-4. **Baseline / experiment diff**  
-   Clone request, change one approved field, compare deterministically.
+```text
+packages/core/       Pure HAR, redaction, graph, scope, diff, and evidence logic
+packages/server/     Fastify API, SQLite persistence, and bounded replay executor
+packages/web/        React investigation cockpit and contextual classroom
+fixtures/sample.har  Synthetic passive-learning traffic
+docs/                Architecture, canonical workflow, and complete course/manual
+docker-compose.yml   Optional development-container service
+```
 
-5. **Evidence export**  
-   Markdown report, graph JSON, redacted HAR reference, hashes.
+## Status and License
 
-6. **Proxy integration**  
-   Caido / Burp / mitmproxy ingestion once the standalone HAR path is solid.
+Implementation is complete through P9: raw HTTP inspection, identity investigation, experiment notebook, deterministic deep diff, threat mapping, SSRF reasoning signals, SQLite persistence, runtime scope enforcement, and human-approved active replay.
 
-7. **Optional ZAP annotations**  
-   Consume scanner results as graph notes for in-scope targets only.
-
----
-
-## Explicit Non-Goals (v1)
-
-- Autonomous exploitation
-- Internet-wide discovery
-- Blind active scanning of arbitrary URLs
-- “AI says vulnerable” severity labels
-- Browser credential collection
-- Large vulnerability payload libraries
-- Multi-user cloud hosting of raw captured sessions
-
-Support **authorized, local capture + visual mapping + tester-approved experiments** only.
-
----
-
-## Inspiration & Alignment
-
-- OWASP Attack Surface Analysis Cheat Sheet
-- OWASP Web Security Testing Guide (WSTG)
-- OWASP Threat Dragon (data-flow + STRIDE)
-- Deterministic evidence & provenance patterns (Aegis / Aletheia lineage)
-
----
-
-## License
-
-Apache-2.0
-
----
-
-**Status:** Monorepo scaffolded. Core domain modules (HAR import, redaction, path templates, graph, hypotheses, one-variable guard, diff, evidence ledger) + Fastify server + React shell are in place. Next: interactive graph canvas and threat cards.
+Licensed under Apache-2.0.

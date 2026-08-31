@@ -1,52 +1,126 @@
-# SurfaceTrace Architecture (v1)
+# SurfaceTrace Architecture
 
-Local-first, deterministic core with an optional advisory guidance layer.
+SurfaceTrace is a local-first, deterministic investigation cockpit. Core security decisions are pure TypeScript, the Fastify server owns persistence and outbound execution, and the React UI keeps passive evidence separate from active requests.
 
 ## Module Boundaries
 
-```
-surfacetrace/
-├── packages/
-│   ├── core/                 # pure TypeScript domain logic (no UI, no network)
-│   │   ├── har/             # HAR parser + normalizer
-│   │   ├── graph/           # nodes, edges, route templating
-│   │   ├── threat/          # boundaries, assets, priority scoring, STRIDE prompts
-│   │   ├── experiment/      # baseline lock + one-variable mutation rules
-│   │   ├── diff/            # deterministic response comparison
-│   │   └── evidence/        # hash-linked ledger (SHA-256)
-│   ├── server/               # Fastify local API + SQLite
-│   └── web/                  # React + TypeScript + React Flow canvas
-├── fixtures/                 # sample redacted HARs for tests
-└── docs/
+```text
+packages/
+  core/       Pure HAR, redaction, graph, hypothesis, experiment, diff, evidence, and scope logic
+  server/     Bounded local API, server-owned SQLite, and the dedicated replay executor
+  web/        React investigation cockpit, experiment notebook, and static learning layer
+fixtures/     Authorized synthetic traffic used by tests and demonstrations
+docs/         Architecture and canonical tester workflow
 ```
 
-## Data Flow
+Only `packages/server/src/replay/httpClient.ts` performs replay network I/O. Arbitrary routes do not create their own HTTP clients.
 
-1. **Import** — HAR (or future proxy export) enters the importer.
-2. **Redact** — secrets stripped before any persistence.
-3. **Normalize** — requests become endpoint templates + input descriptors.
-4. **Graph** — nodes/edges materialize; trust boundaries can be annotated.
-5. **Hypothesize** — signals generate review questions (not exploit payloads).
-6. **Experiment** — tester declares exactly one change; system clones & mutates.
-7. **Diff** — pure comparison produces a structured card.
-8. **Ledger** — observation + experiment + diff + notes are hashed and appended.
-9. **Export** — redacted evidence package (markdown + JSON + hashes).
+## Investigation Pipeline
 
-## Invariants
+```text
+HAR / imported traffic
+        |
+        v
+redaction
+        |
+        v
+normalization
+        |
+        v
+observations / endpoints / inputs
+        |
+        v
+server-owned SQLite
+        |
+        v
+identity / assets / trust boundaries
+        |
+        v
+hypotheses
+        |
+        v
+experiment notebook
+        |
+        v
+request reconstruction
+        |
+        v
+scope + rate + stop gates
+        |
+        v
+human preview + explicit approval
+        |
+        v
+dedicated HTTP executor
+        |
+        v
+redacted response capture
+        |
+        v
+deep deterministic diff
+        |
+        v
+hash-linked evidence
+```
 
-- Redaction happens before storage.
-- Scope and rate limits are enforced in code, not by hope.
-- Diffs and evidence hashes are deterministic.
-- AI (if present) is advisory only and never decides vulnerability or severity.
-- No autonomous active scanning in v1.
+Passive comparisons stop at the experiment notebook and compare two imported observations without network activity. Active replay continues through reconstruction and all execution gates.
 
-## Storage
+## Canonical Data
 
-SQLite for v1. Graph can live in ordinary relational tables; a later migration to a dedicated graph store is optional.
+Imported requests become redacted `Observation` records, deterministic endpoint templates, and value-free input descriptors. Supported input locations are path, query, selected headers, cookies, JSON bodies, and form bodies. Raw query secrets, cookies, credential headers, and sensitive body values do not enter canonical persistence or evidence.
 
-## Security Posture of the Tool Itself
+Identity assignments are manual. Assets and trust boundaries are manual annotations. Hypotheses and SSRF reasoning are deterministic, inferred review prompts rather than findings or vulnerability verdicts.
 
-- Local-only by default.
-- No cloud upload of raw sessions.
-- Explicit authorization record required before any experiment can be run.
-- Stop conditions (production impact, real-user data) are first-class.
+## State And Storage
+
+SQLite is owned by the Fastify server. The persistence adapter stores canonical redacted observations together with projects, imports, endpoint/input inventories, identity assignments, threat annotations, hypotheses, experiments, deep diffs, project scope, and exact hash-linked evidence records.
+
+The database has an explicit schema version and supported migrations. Known versions migrate non-destructively; unknown versions fail clearly. Investigation state and evidence-chain integrity are restored and verified after server restart. Runtime replay credentials are deliberately excluded from SQLite and must be supplied again after restart.
+
+`SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`. Browser-only lesson proficiency and current UI context remain in local browser storage.
+
+## Active Replay Boundary
+
+Replay reconstruction starts only from a known imported baseline and preserves its method, URL, safe headers, query, and body except for one mutation accepted by `assertOneVariable()`. Identity replay additionally requires runtime credential material explicitly associated with the target identity.
+
+Preparation performs no network activity. It canonicalizes the candidate, evaluates configured scope and stop state, checks rate availability, and returns an exact redacted preview. The preview token is single-use. On `SEND THIS REQUEST`, the server rechecks every gate, consumes rate budget only immediately before execution, deletes the token, and sends exactly one request.
+
+The dedicated executor:
+
+- accepts HTTP and HTTPS only;
+- rejects malformed URLs;
+- disables automatic redirect following;
+- uses a bounded timeout;
+- enforces a bounded response-body size and records truncation;
+- performs no automatic retries.
+
+A redirect `Location` is redacted and evaluated independently through the scope engine. It is displayed only as a proposed target and cannot be followed without a new preview and approval.
+
+## Diff And Evidence
+
+Replay responses cross the existing redaction boundary before becoming observations. The existing deep-diff implementation compares status, headers, nested body fields, arrays, types, and truncation state. SurfaceTrace does not maintain a parallel replay-history subsystem: approval metadata, response observations, diffs, conclusions, and evidence attach to the existing experiment notebook model.
+
+Evidence is logically append-only and hash-linked. Replay appends distinct records for preparation, scope decision, human approval, request sent, response received, and diff creation. Persistent evidence never contains runtime credential values.
+
+## Safety Invariants
+
+1. Authorization is established before traffic enters an investigation.
+2. Missing or invalid scope produces zero outbound requests.
+3. Controlled experiments contain exactly one declared mutation.
+4. One explicit approval sends one request.
+5. Redirects require a new approval.
+6. There are no automatic retries.
+7. Rate and stop conditions fail closed.
+8. Secrets are redacted before persistence and evidence.
+9. Identity assignments and credential associations are explicit.
+10. Hypotheses and SSRF signals are not vulnerability verdicts.
+11. Conclusions remain human-controlled.
+12. Bulk replay, fuzzing, crawling, scanning, and autonomous exploitation are excluded.
+
+## Runtime Topology
+
+The web development server listens on port `5173` and proxies `/api` to Fastify on port `8787`. Docker Compose publishes both ports, mounts the workspace, keeps dependencies in a named volume, and persists SQLite data in the `surfacetrace-data` volume.
+
+## Explicit Non-Goals
+
+SurfaceTrace does not provide autonomous exploitation, internet-wide scanning, bulk fuzzing, payload libraries, cloud collection of raw sessions, AI vulnerability verdicts, automatic redirects, or retry loops.

@@ -1,109 +1,2892 @@
-import { useCallback, useState } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  curriculum,
+  lessonById,
+  trackNames,
+  type Lesson,
+  type SkillState,
+} from "./lessons/curriculum";
+import { recommendLessons } from "./lessons/recommend";
+import "./inspector.css";
 
-interface ImportSummary {
-  observations: number;
-  endpoints: number;
-  inputs: number;
-  hypotheses: number;
-  graph: { nodes: number; edges: number };
-  evidenceTip: string | null;
+type View = "command" | "investigation" | "classroom" | "evidence";
+interface Endpoint {
+  id: string;
+  method: string;
+  host: string;
+  pathTemplate: string;
+  observationCount: number;
+  statusCodes: number[];
 }
+interface Input {
+  id: string;
+  endpointId: string;
+  name: string;
+  location: string;
+  sampleTypes: string[];
+  sensitivity: string;
+  observedCount: number;
+}
+interface Hypothesis {
+  id: string;
+  endpointId: string;
+  question: string;
+  signal: string;
+  priority: number;
+  status: string;
+  observationIds?: string[];
+  experimentIds?: string[];
+  assetIds?: string[];
+  trustBoundaryIds?: string[];
+  evidenceIds?: string[];
+  notes?: string | null;
+  provenance?: "inferred";
+  reasoning?: {
+    category: "ssrf" | "redirect";
+    inputId: string;
+    inputName: string;
+    inputLocation: string;
+    signalType: string;
+    signalReason: string;
+    signalStrength: "strong" | "moderate" | "contextual";
+    valueClass: "absolute URL" | null;
+    followUpQuestion: string | null;
+    teachingContext: string;
+    nextSteps: string[];
+  } | null;
+}
+interface AssetAnnotation {
+  id: string;
+  label: string;
+  category: string;
+  notes: string | null;
+  linkedEndpointIds: string[];
+  linkedObservationIds: string[];
+  provenance: "manual";
+}
+interface BoundaryAnnotation {
+  id: string;
+  label: string;
+  type: string;
+  notes: string | null;
+  sourceRef: string;
+  destinationRef: string;
+  provenance: "manual";
+}
+interface GraphView {
+  nodes: Array<{ id: string; kind: string; label: string; provenance: string }>;
+  edges: Array<{ id: string; source: string; target: string; label?: string }>;
+}
+interface Observation {
+  id: string;
+  endpointId: string;
+  url: string;
+  method: string;
+  responseStatus: number;
+  responseSize: number;
+  responseBodyShape: string | null;
+  capturedAt: string;
+  identityId: string | null;
+  http?: {
+    request: {
+      httpVersion: string;
+      target: string;
+      headers: Record<string, string>;
+      cookies: Record<string, string>;
+      query: Record<string, string>;
+      body: string | null;
+    };
+    response: {
+      httpVersion: string;
+      status: number;
+      statusText: string;
+      headers: Record<string, string>;
+      body: string | null;
+    };
+  };
+  parsedInputs?: {
+    name: string;
+    location: string;
+    type: string;
+    sensitive: boolean;
+  }[];
+}
+interface Identity {
+  id: string;
+  label: string;
+  role: "anonymous" | "user" | "admin" | "service" | "unknown";
+  notes: string | null;
+  associatedObservationIds: string[];
+}
+interface Evidence {
+  id: string;
+  kind: string;
+  createdAt: string;
+  contentHash: string;
+  payload: unknown;
+}
+interface ExperimentRecord {
+  id: string;
+  endpointId: string;
+  hypothesisId: string | null;
+  baselineObservationId: string;
+  resultObservationId: string;
+  baselineIdentityId: string | null;
+  resultIdentityId: string | null;
+  mutationDescription: string;
+  comparisonClassification: "controlled" | "observational";
+  requestDifferences: string[];
+  diff: DiffView;
+  conclusion: string | null;
+  notes: string | null;
+  status: string;
+  evidenceIds: string[];
+  createdAt: string;
+  replay?: { active: boolean };
+}
+interface ReplayPreview {
+  token: string | null;
+  baseline: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: string | null;
+  };
+  preview: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: string | null;
+  };
+  changedOnly: string;
+  scopeDecision: { allowed: boolean; reason: string };
+  rateAvailable: boolean;
+  approvalRequired: boolean;
+}
+interface DiffView {
+  summary: string;
+  statusChanged?: boolean;
+  statusFrom?: number;
+  statusTo?: number;
+  headerChanges?: string[];
+  bodyComparison?: string;
+  bodyChanges?: Array<{
+    path: string;
+    changeType: string;
+    before: unknown;
+    after: unknown;
+  }>;
+  bodyChangeCount?: number;
+  truncated?: boolean;
+  truncationReason?: string | null;
+}
+interface Inventory {
+  observations: Observation[];
+  endpoints: Endpoint[];
+  inputs: Input[];
+  hypotheses: Hypothesis[];
+  evidence: Evidence[];
+  identities: Identity[];
+  experiments?: ExperimentRecord[];
+  assets?: AssetAnnotation[];
+  trustBoundaries?: BoundaryAnnotation[];
+  graph?: GraphView;
+  scope?: ProjectScope | null;
+}
+interface ProjectScope {
+  id?: string;
+  active: boolean;
+  allowedHosts: string[];
+  allowedProtocols: string[];
+  allowedPorts: number[];
+  allowedPathPrefixes: string[];
+  excludedPathPrefixes: string[];
+  allowedMethods: string[];
+  maxRequestsPerMinute: number;
+  stopConditions: {
+    manualStop: boolean;
+    maxRequestCount: number | null;
+    requestCount?: number;
+    repeatedServerErrors: boolean;
+    authenticationLost: boolean;
+    customNote: string | null;
+  };
+  notes: string | null;
+}
+const emptyInventory: Inventory = {
+  observations: [],
+  endpoints: [],
+  inputs: [],
+  hypotheses: [],
+  evidence: [],
+  identities: [],
+  experiments: [],
+  assets: [],
+  trustBoundaries: [],
+};
 
 export default function App() {
-  const [summary, setSummary] = useState<ImportSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("command");
+  const [inventory, setInventory] = useState<Inventory>(emptyInventory);
+  const [endpointId, setEndpointId] = useState<string | null>(() =>
+    localStorage.getItem("surfacetrace:endpoint"),
+  );
+  const [lessonId, setLessonId] = useState<string | null>(() =>
+    localStorage.getItem("surfacetrace:lesson"),
+  );
+  const [returnView, setReturnView] = useState<View>("investigation");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState<ProjectScope | null>(null);
+  const [skills, setSkills] = useState<Record<string, SkillState>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("surfacetrace:skills") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const endpoint =
+    inventory.endpoints.find((item) => item.id === endpointId) ??
+    inventory.endpoints[0];
+  const inputs = inventory.inputs.filter(
+    (item) => item.endpointId === endpoint?.id,
+  );
+  const hypotheses = inventory.hypotheses.filter(
+    (item) => item.endpointId === endpoint?.id,
+  );
+  const recommendations = endpoint
+    ? recommendLessons({
+        method: endpoint.method,
+        inputLocations: inputs.map((item) => item.location),
+        hypothesisSignals: hypotheses.map((item) => item.signal),
+      })
+    : [];
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/scope")
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as { scope: ProjectScope | null })
+          : null,
+      )
+      .then((result) => {
+        if (active && result) setScope(result.scope);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  const onFile = useCallback(async (file: File) => {
+  function chooseEndpoint(id: string): void {
+    setEndpointId(id);
+    localStorage.setItem("surfacetrace:endpoint", id);
+  }
+  function openLesson(lesson: Lesson, from: View): void {
+    setLessonId(lesson.id);
+    setReturnView(from);
+    setView("classroom");
+    localStorage.setItem("surfacetrace:lesson", lesson.id);
+  }
+  function setSkill(id: string, state: SkillState): void {
+    const next = { ...skills, [id]: state };
+    setSkills(next);
+    localStorage.setItem("surfacetrace:skills", JSON.stringify(next));
+  }
+  async function refreshInventory(): Promise<Inventory> {
+    const response = await fetch("/api/inventory");
+    if (!response.ok) throw new Error("Inventory could not be loaded");
+    const next = (await response.json()) as Inventory;
+    setInventory(next);
+    setScope(next.scope ?? null);
+    return next;
+  }
+  async function importFile(file: File): Promise<void> {
     setBusy(true);
     setError(null);
     try {
-      const text = await file.text();
-      const res = await fetch("/api/import/har", {
+      const response = await fetch("/api/import/har", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ har: text }),
+        body: JSON.stringify({ har: await file.text() }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      const data = (await res.json()) as ImportSummary;
-      setSummary(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(body.error ?? `HTTP ${response.status}`);
+      const refreshed = await refreshInventory();
+      if (refreshed.endpoints[0]) chooseEndpoint(refreshed.endpoints[0].id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }
 
   return (
-    <div className="app">
-      <header className="header">
-        <h1>SurfaceTrace</h1>
-        <p className="tagline">
-          Attack-surface graph + threat mapper. One variable at a time.
-        </p>
+    <div className="app-shell">
+      <header className="masthead">
+        <button className="brand" onClick={() => setView("command")}>
+          SURFACE<span>TRACE</span>
+        </button>
+        <div className="investigation-name">
+          <small>CURRENT INVESTIGATION</small>
+          <strong>{endpoint?.host ?? "Awaiting authorized traffic"}</strong>
+        </div>
+        <div className={`scope ${scope?.active ? "active" : "disabled"}`}>
+          <i />{" "}
+          {scope?.active
+            ? "ACTIVE SCOPE"
+            : "NO ACTIVE SCOPE - EXECUTION DISABLED"}
+        </div>
       </header>
+      <nav className="primary-nav" aria-label="Main navigation">
+        {(["command", "investigation", "classroom", "evidence"] as View[]).map(
+          (item) => (
+            <button
+              key={item}
+              className={view === item ? "active" : ""}
+              onClick={() => setView(item)}
+            >
+              {item === "command" ? "COMMAND CENTER" : item.toUpperCase()}
+            </button>
+          ),
+        )}
+      </nav>
+      {view === "command" && (
+        <CommandCenter
+          inventory={inventory}
+          endpoint={endpoint}
+          inputs={inputs}
+          recommendations={recommendations}
+          busy={busy}
+          error={error}
+          onImport={importFile}
+          onInvestigate={() => setView("investigation")}
+          onLesson={(item) => openLesson(item, "command")}
+          scope={scope}
+          onScope={setScope}
+        />
+      )}
+      {view === "investigation" && (
+        <Investigation
+          key={endpoint?.id ?? "empty"}
+          inventory={inventory}
+          current={endpoint}
+          onChoose={chooseEndpoint}
+          onSaved={refreshInventory}
+          onLesson={(item) => openLesson(item, "investigation")}
+          recommendations={recommendations}
+        />
+      )}
+      {view === "classroom" && (
+        <Classroom
+          selected={lessonId ? lessonById(lessonId) : undefined}
+          skills={skills}
+          onOpen={(item) => openLesson(item, "classroom")}
+          onSkill={setSkill}
+          onReturn={() => setView(returnView)}
+          recommendation={recommendations[0]}
+        />
+      )}
+      {view === "evidence" && (
+        <EvidenceView
+          evidence={inventory.evidence}
+          observations={inventory.observations}
+        />
+      )}
+    </div>
+  );
+}
 
-      <main className="main">
-        <section className="panel dropzone">
-          <h2>1. Import baseline traffic</h2>
-          <p>Drop a HAR from Caido, Burp, or browser DevTools (authorized targets only).</p>
+function CommandCenter({
+  inventory,
+  endpoint,
+  inputs,
+  recommendations,
+  busy,
+  error,
+  onImport,
+  onInvestigate,
+  onLesson,
+  scope,
+  onScope,
+}: {
+  inventory: Inventory;
+  endpoint?: Endpoint;
+  inputs: Input[];
+  recommendations: ReturnType<typeof recommendLessons>;
+  busy: boolean;
+  error: string | null;
+  onImport: (file: File) => void;
+  onInvestigate: () => void;
+  onLesson: (lesson: Lesson) => void;
+  scope: ProjectScope | null;
+  onScope: (scope: ProjectScope) => void;
+}) {
+  return (
+    <main className="dashboard reveal">
+      <section className="panel summary-panel">
+        <PanelLabel number="01" label="ATTACK SURFACE" />
+        <div className="metric-grid">
+          <Metric value={inventory.endpoints.length} label="ENDPOINTS" />
+          <Metric value={inventory.inputs.length} label="INPUTS" />
+          <Metric value={inventory.hypotheses.length} label="HYPOTHESES" />
+          <Metric value={inventory.evidence.length} label="EVIDENCE" />
+        </div>
+        <label className="import-control">
           <input
             type="file"
             accept=".har,application/json"
             disabled={busy}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void onFile(f);
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onImport(file);
             }}
           />
-          {busy && <p className="muted">Importing…</p>}
-          {error && <p className="error">{error}</p>}
-        </section>
-
-        {summary && (
-          <section className="panel stats">
-            <h2>2. Attack surface inventory</h2>
-            <ul>
-              <li>
-                <strong>{summary.observations}</strong> observations
-              </li>
-              <li>
-                <strong>{summary.endpoints}</strong> endpoints
-              </li>
-              <li>
-                <strong>{summary.inputs}</strong> inputs
-              </li>
-              <li>
-                <strong>{summary.hypotheses}</strong> review hypotheses
-              </li>
-              <li>
-                Graph: {summary.graph.nodes} nodes / {summary.graph.edges} edges
-              </li>
-              <li className="mono">Evidence tip: {summary.evidenceTip ?? "—"}</li>
-            </ul>
-            <p className="muted">
-              Next: open the graph canvas and threat cards (coming in the next milestone).
+          <span>{busy ? "NORMALIZING..." : "IMPORT AUTHORIZED HAR"}</span>
+        </label>
+        {error && <p className="error">{error}</p>}
+      </section>
+      <section className="panel focus-panel">
+        <PanelLabel number="02" label="CURRENT FOCUS" />
+        {endpoint ? (
+          <>
+            <div className="method-line">
+              <b>{endpoint.method}</b>
+              <code>{endpoint.pathTemplate}</code>
+            </div>
+            <p className="signal-copy">
+              {inputs.some((item) => item.location === "path")
+                ? "Object identifier observed in the request path."
+                : "Endpoint selected for structured review."}
             </p>
-          </section>
+            <button className="action" onClick={onInvestigate}>
+              OPEN INVESTIGATION <span>-&gt;</span>
+            </button>
+          </>
+        ) : (
+          <Empty text="Import fixtures/sample.har to begin the guided investigation, or choose an authorized HAR." />
         )}
+      </section>
+      <section className="panel queue-panel">
+        <PanelLabel number="03" label="INVESTIGATION QUEUE" />
+        {inventory.hypotheses.slice(0, 4).map((item) => (
+          <div className="queue-item" key={item.id}>
+            <span className={item.priority >= 7 ? "risk high" : "risk medium"}>
+              {item.priority >= 7 ? "HIGH" : "MED"}
+            </span>
+            <div>
+              <strong>{item.signal.replaceAll("-", " ")}</strong>
+              <small>HYPOTHESIS / NOT A FINDING</small>
+            </div>
+          </div>
+        ))}
+        {!inventory.hypotheses.length && (
+          <Empty text="No hypotheses until traffic is imported." />
+        )}
+      </section>
+      <section className="panel learning-panel">
+        <PanelLabel number="04" label="RELATED LEARNING" />
+        {recommendations[0] ? (
+          <>
+            <span className="eyebrow">RELATED SKILL</span>
+            <h2>{recommendations[0].lesson.title}</h2>
+            <p>{recommendations[0].why}</p>
+            <div className="estimate">
+              {recommendations[0].lesson.estimatedMinutes} MIN /{" "}
+              {recommendations[0].lesson.level.toUpperCase()}
+            </div>
+            <button
+              className="action coral"
+              onClick={() => onLesson(recommendations[0]!.lesson)}
+            >
+              OPEN LESSON <span>-&gt;</span>
+            </button>
+          </>
+        ) : (
+          <Empty text="Contextual lessons appear after import." />
+        )}
+      </section>
+      <section className="panel evidence-strip">
+        <PanelLabel number="05" label="RECENT EVIDENCE" />
+        <div className="evidence-row">
+          <span>
+            {inventory.observations.length
+              ? "HASH CHAIN VALID"
+              : "LEDGER READY"}
+          </span>
+          <code>
+            {inventory.evidence.at(-1)?.contentHash.slice(0, 28) ??
+              "No evidence records yet"}
+          </code>
+          <small>{inventory.observations.length} normalized observations</small>
+        </div>
+      </section>
+      <ScopePanel
+        key={scope?.id ?? "no-scope"}
+        scope={scope}
+        onScope={onScope}
+      />
+    </main>
+  );
+}
 
-        <section className="panel workflow">
-          <h2>Discipline</h2>
+function ScopePanel({
+  scope,
+  onScope,
+}: {
+  scope: ProjectScope | null;
+  onScope: (scope: ProjectScope) => void;
+}) {
+  const [hosts, setHosts] = useState(scope?.allowedHosts.join(", ") ?? "");
+  const [protocols, setProtocols] = useState(
+    scope?.allowedProtocols.join(", ") ?? "https",
+  );
+  const [ports, setPorts] = useState(scope?.allowedPorts.join(", ") ?? "443");
+  const [allowedPaths, setAllowedPaths] = useState(
+    scope?.allowedPathPrefixes.join(", ") ?? "/",
+  );
+  const [excludedPaths, setExcludedPaths] = useState(
+    scope?.excludedPathPrefixes.join(", ") ?? "",
+  );
+  const [methods, setMethods] = useState(
+    scope?.allowedMethods.join(", ") ?? "GET",
+  );
+  const [rate, setRate] = useState(String(scope?.maxRequestsPerMinute ?? 10));
+  const [active, setActive] = useState(scope?.active ?? false);
+  const [manualStop, setManualStop] = useState(
+    scope?.stopConditions.manualStop ?? false,
+  );
+  const [candidateMethod, setCandidateMethod] = useState("GET");
+  const [candidateUrl, setCandidateUrl] = useState("");
+  const [decision, setDecision] = useState<{
+    allowed: boolean;
+    reasonCode: string;
+    reason: string;
+  } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const csv = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  async function save(): Promise<void> {
+    const response = await fetch("/api/scope", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        active,
+        allowedHosts: csv(hosts),
+        allowedProtocols: csv(protocols),
+        allowedPorts: csv(ports).map(Number),
+        allowedPathPrefixes: csv(allowedPaths),
+        excludedPathPrefixes: csv(excludedPaths),
+        allowedMethods: csv(methods),
+        maxRequestsPerMinute: Number(rate),
+        stopConditions: {
+          manualStop,
+          maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
+          repeatedServerErrors: false,
+          authenticationLost: false,
+          customNote: null,
+        },
+        notes: scope?.notes ?? null,
+      }),
+    });
+    const result = (await response.json()) as {
+      scope?: ProjectScope;
+      error?: string;
+    };
+    if (!response.ok || !result.scope) {
+      setMessage(result.error ?? "Scope could not be saved");
+      return;
+    }
+    onScope(result.scope);
+    setMessage("Scope saved. No request was sent.");
+  }
+  async function preview(): Promise<void> {
+    const response = await fetch("/api/scope/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
+    });
+    const result = (await response.json()) as {
+      decision: { allowed: boolean; reasonCode: string; reason: string };
+    };
+    setDecision(result.decision);
+  }
+  return (
+    <section className="panel scope-panel">
+      <PanelLabel number="06" label="RUNTIME SCOPE GATE" />
+      <div className={`scope-banner ${scope?.active ? "active" : "disabled"}`}>
+        {scope?.active
+          ? "ACTIVE SCOPE"
+          : "NO ACTIVE SCOPE - EXECUTION DISABLED"}
+      </div>
+      <p>
+        Configure explicit permission for future candidate requests.
+        SurfaceTrace does not send requests from this panel.
+      </p>
+      <div className="scope-grid">
+        <label>
+          Allowed hosts
+          <input
+            aria-label="Allowed hosts"
+            value={hosts}
+            onChange={(event) => setHosts(event.target.value)}
+            placeholder="example.test"
+          />
+        </label>
+        <label>
+          Protocols
+          <input
+            aria-label="Allowed protocols"
+            value={protocols}
+            onChange={(event) => setProtocols(event.target.value)}
+          />
+        </label>
+        <label>
+          Ports
+          <input
+            aria-label="Allowed ports"
+            value={ports}
+            onChange={(event) => setPorts(event.target.value)}
+          />
+        </label>
+        <label>
+          Allowed paths
+          <input
+            aria-label="Allowed paths"
+            value={allowedPaths}
+            onChange={(event) => setAllowedPaths(event.target.value)}
+          />
+        </label>
+        <label>
+          Excluded paths
+          <input
+            aria-label="Excluded paths"
+            value={excludedPaths}
+            onChange={(event) => setExcludedPaths(event.target.value)}
+            placeholder="/api/admin/"
+          />
+        </label>
+        <label>
+          Methods
+          <input
+            aria-label="Allowed methods"
+            value={methods}
+            onChange={(event) => setMethods(event.target.value)}
+          />
+        </label>
+        <label>
+          Requests per minute
+          <input
+            aria-label="Requests per minute"
+            type="number"
+            min="1"
+            value={rate}
+            onChange={(event) => setRate(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="scope-toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={active}
+            onChange={(event) => setActive(event.target.checked)}
+          />{" "}
+          Enable active scope
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={manualStop}
+            onChange={(event) => setManualStop(event.target.checked)}
+          />{" "}
+          Manual stop
+        </label>
+      </div>
+      <button className="action" onClick={() => void save()}>
+        SAVE SCOPE
+      </button>
+      {message && <p>{message}</p>}
+      <div className="candidate-preview">
+        <h3>CANDIDATE REQUEST PREVIEW</h3>
+        <select
+          aria-label="Candidate method"
+          value={candidateMethod}
+          onChange={(event) => setCandidateMethod(event.target.value)}
+        >
+          {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(
+            (method) => (
+              <option key={method}>{method}</option>
+            ),
+          )}
+        </select>
+        <input
+          aria-label="Candidate URL"
+          value={candidateUrl}
+          onChange={(event) => setCandidateUrl(event.target.value)}
+          placeholder="https://example.test/api/users/100"
+        />
+        <button onClick={() => void preview()}>CHECK SCOPE - NO NETWORK</button>
+        {decision && (
+          <div
+            className={`scope-decision ${decision.allowed ? "allow" : "deny"}`}
+          >
+            <b>{decision.allowed ? "IN SCOPE" : "OUT OF SCOPE"}</b>
+            <code>{decision.reasonCode}</code>
+            <p>{decision.reason}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Investigation({
+  inventory,
+  current,
+  onChoose,
+  onSaved,
+  onLesson,
+  recommendations,
+}: {
+  inventory: Inventory;
+  current?: Endpoint;
+  onChoose: (id: string) => void;
+  onSaved: () => Promise<unknown>;
+  onLesson: (lesson: Lesson) => void;
+  recommendations: ReturnType<typeof recommendLessons>;
+}) {
+  const inputs = inventory.inputs.filter(
+    (item) => item.endpointId === current?.id,
+  );
+  const hypotheses = inventory.hypotheses.filter(
+    (item) => item.endpointId === current?.id,
+  );
+  const observations = inventory.observations.filter(
+    (item) => item.endpointId === current?.id,
+  );
+  const [hypothesisId, setHypothesisId] = useState("");
+  const [baselineId, setBaselineId] = useState("");
+  const [resultId, setResultId] = useState("");
+  const [inputId, setInputId] = useState("");
+  const [fromValue, setFromValue] = useState("");
+  const [toValue, setToValue] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [experimentError, setExperimentError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<{
+    status: string;
+    summary: string;
+    evidenceCount: number;
+    mutationDescription?: string;
+    diff?: DiffView;
+  } | null>(null);
+  const [inspectorObservationId, setInspectorObservationId] = useState(
+    observations[0]?.id ?? "",
+  );
+  const [inspectorTab, setInspectorTab] = useState<
+    "request" | "response" | "parsed" | "diff"
+  >("request");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState("");
+  const selectedInput = inputs.find((item) => item.id === inputId);
+  const inspected =
+    observations.find((item) => item.id === inspectorObservationId) ??
+    observations[0];
+  const ready = Boolean(
+    hypothesisId &&
+    baselineId &&
+    resultId &&
+    inputId &&
+    fromValue &&
+    toValue &&
+    baselineId !== resultId,
+  );
+
+  async function saveExperiment(): Promise<void> {
+    if (!current || !selectedInput) return;
+    setSaving(true);
+    setExperimentError(null);
+    setSaved(null);
+    const detail = {
+      name: selectedInput.name,
+      from: fromValue || null,
+      to: toValue || null,
+    };
+    const mutation =
+      selectedInput.location === "path"
+        ? {
+            pathParam: {
+              name: selectedInput.name,
+              from: fromValue,
+              to: toValue,
+            },
+          }
+        : selectedInput.location === "query"
+          ? { queryParam: detail }
+          : ["header", "cookie"].includes(selectedInput.location)
+            ? { header: detail }
+            : {
+                bodyField: {
+                  path: selectedInput.name,
+                  from: fromValue || null,
+                  to: toValue || null,
+                },
+              };
+    try {
+      const response = await fetch("/api/experiments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpointId: current.id,
+          hypothesisId,
+          baselineObservationId: baselineId,
+          resultObservationId: resultId,
+          inputId,
+          mutation,
+          notes,
+        }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        experiment?: { status: string; mutationDescription: string };
+        diff?: DiffView;
+        evidence?: unknown[];
+      };
+      if (!response.ok || !data.experiment || !data.diff)
+        throw new Error(data.error ?? `HTTP ${response.status}`);
+      setSaved({
+        status: data.experiment.status,
+        summary: data.diff.summary,
+        evidenceCount: data.evidence?.length ?? 0,
+        mutationDescription: data.experiment.mutationDescription,
+        diff: data.diff,
+      });
+      await onSaved();
+    } catch (reason) {
+      setExperimentError(
+        reason instanceof Error ? reason.message : String(reason),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="investigation-page reveal">
+      <section className="graph-stage">
+        <div className="graph-heading">
+          <PanelLabel number="A" label="ATTACK SURFACE GRAPH" />
+          <p>Click an endpoint node to establish focus.</p>
+        </div>
+        <div
+          className="graph-canvas"
+          role="group"
+          aria-label="Attack surface graph"
+        >
+          {inventory.endpoints.map((item, index) => (
+            <button
+              key={item.id}
+              style={{ "--node-index": index } as CSSProperties}
+              className={`graph-node ${current?.id === item.id ? "selected" : ""}`}
+              onClick={() => onChoose(item.id)}
+            >
+              <b>{item.method}</b>
+              <span>{item.pathTemplate}</span>
+              <small>{item.observationCount} observations</small>
+              <small>OBSERVED</small>
+            </button>
+          ))}
+          {current &&
+            inputs.map((item) => (
+              <div className="graph-input" key={item.id}>
+                <span>{item.location}</span>
+                {item.name}
+              </div>
+            ))}
+          {(inventory.graph?.nodes ?? [])
+            .filter((node) => !["endpoint", "input"].includes(node.kind))
+            .map((node) => (
+              <button
+                key={node.id}
+                aria-label={`${node.kind.replaceAll("_", " ")} graph node`}
+                className={`graph-annotation ${node.kind} ${selectedGraphNodeId === node.id ? "selected" : ""}`}
+                onClick={() => setSelectedGraphNodeId(node.id)}
+              >
+                <span>{node.kind.replaceAll("_", " ")}</span>
+                <strong>{node.label}</strong>
+                <small>{node.provenance.toUpperCase()}</small>
+              </button>
+            ))}
+        </div>
+        <div className="graph-edges">
+          {(inventory.graph?.edges ?? []).map((edge) => (
+            <span key={edge.id}>
+              {graphNodeLabel(edge.source, inventory.graph)} <b>-&gt;</b>{" "}
+              {graphNodeLabel(edge.target, inventory.graph)}{" "}
+              <small>{edge.label}</small>
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="investigation-detail loop-detail">
+        {current ? (
+          <>
+            <span className="eyebrow">CURRENT ENDPOINT</span>
+            <h1>
+              {current.method} {current.pathTemplate}
+            </h1>
+            <p className="host">
+              {current.host} / status {current.statusCodes.join(", ")}
+            </p>
+            <HttpInspector
+              observation={inspected}
+              observations={observations}
+              selectedId={inspectorObservationId}
+              onSelect={setInspectorObservationId}
+              tab={inspectorTab}
+              onTab={setInspectorTab}
+              diff={saved?.diff}
+              identities={inventory.identities}
+              onAssign={async (observationId, identityId) => {
+                const response = await fetch(
+                  `/api/observations/${observationId}/identity`,
+                  {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ identityId }),
+                  },
+                );
+                if (!response.ok)
+                  throw new Error("Identity assignment could not be saved");
+                await onSaved();
+              }}
+            />
+            <ThreatAnnotations
+              current={current}
+              identities={inventory.identities}
+              assets={inventory.assets ?? []}
+              boundaries={inventory.trustBoundaries ?? []}
+              onSaved={onSaved}
+            />
+            <ThreatCards
+              hypotheses={hypotheses}
+              endpoint={current}
+              inputs={inputs}
+              observations={observations}
+              identities={inventory.identities}
+              assets={inventory.assets ?? []}
+              boundaries={inventory.trustBoundaries ?? []}
+              experiments={inventory.experiments ?? []}
+              evidence={inventory.evidence}
+              onSaved={onSaved}
+            />
+            <IdentityComparison
+              endpoint={current}
+              observations={observations}
+              identities={inventory.identities}
+              hypothesisId={hypotheses[0]?.id}
+              onSaved={onSaved}
+            />
+            <ExperimentNotebook
+              experiments={inventory.experiments ?? []}
+              endpoints={inventory.endpoints}
+              hypotheses={inventory.hypotheses}
+              observations={inventory.observations}
+              identities={inventory.identities}
+              onSaved={onSaved}
+            />
+            <ActiveReplay
+              observations={observations}
+              inputs={inputs}
+              hypotheses={hypotheses}
+              onSaved={onSaved}
+            />
+            <h3>OBSERVED INPUTS</h3>
+            <div className="input-table">
+              {inputs.map((item) => (
+                <div key={item.id}>
+                  <span className={`location ${item.location}`}>
+                    {item.location}
+                  </span>
+                  <strong>{item.name}</strong>
+                  <code>{item.sampleTypes.join(" / ")}</code>
+                  <small>{item.sensitivity}</small>
+                </div>
+              ))}
+            </div>
+            <div className="experiment-builder">
+              <div className="builder-title">
+                <span>CONTROLLED COMPARISON</span>
+                <h2>Change one variable.</h2>
+                <p>
+                  Compare two imported observations. SurfaceTrace does not send
+                  a request.
+                </p>
+              </div>
+              <ExperimentStep
+                n="01"
+                title="CHOOSE HYPOTHESIS"
+                complete={Boolean(hypothesisId)}
+              >
+                <div className="choice-list">
+                  {hypotheses.map((item) => (
+                    <button
+                      className={hypothesisId === item.id ? "chosen" : ""}
+                      key={item.id}
+                      onClick={() => setHypothesisId(item.id)}
+                    >
+                      <b>PRIORITY {item.priority}</b>
+                      <span>{item.question}</span>
+                    </button>
+                  ))}
+                </div>
+              </ExperimentStep>
+              <ExperimentStep
+                n="02"
+                title="LOCK BASELINE"
+                complete={Boolean(baselineId)}
+              >
+                <ObservationSelect
+                  label="Baseline observation"
+                  value={baselineId}
+                  observations={observations}
+                  onChange={setBaselineId}
+                />
+              </ExperimentStep>
+              <ExperimentStep
+                n="03"
+                title="DECLARE ONE CHANGED INPUT"
+                complete={Boolean(inputId && fromValue && toValue)}
+              >
+                <label>
+                  Changed input
+                  <select
+                    value={inputId}
+                    onChange={(event) => setInputId(event.target.value)}
+                  >
+                    <option value="">Select one input</option>
+                    {inputs.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.location}: {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="value-pair">
+                  <label>
+                    Baseline value
+                    <input
+                      value={fromValue}
+                      onChange={(event) => setFromValue(event.target.value)}
+                      placeholder="100"
+                    />
+                  </label>
+                  <span>TO</span>
+                  <label>
+                    Changed value
+                    <input
+                      value={toValue}
+                      onChange={(event) => setToValue(event.target.value)}
+                      placeholder="200"
+                    />
+                  </label>
+                </div>
+              </ExperimentStep>
+              <ExperimentStep
+                n="04"
+                title="CHOOSE RESULT + COMPARE"
+                complete={Boolean(saved)}
+              >
+                <ObservationSelect
+                  label="Result observation"
+                  value={resultId}
+                  observations={observations.filter(
+                    (item) => item.id !== baselineId,
+                  )}
+                  onChange={setResultId}
+                />
+                <label>
+                  Evidence note
+                  <textarea
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    placeholder="What did you expect, and why?"
+                  />
+                </label>
+                <button
+                  className="compare-button"
+                  disabled={!ready || saving}
+                  onClick={() => void saveExperiment()}
+                >
+                  {saving ? "COMPARING..." : "COMPARE + SAVE EVIDENCE"}
+                </button>
+                {experimentError && <p className="error">{experimentError}</p>}
+                {saved && (
+                  <div className={`diff-result ${saved.status}`}>
+                    <span>{saved.status.toUpperCase()}</span>
+                    <strong>{saved.summary}</strong>
+                    {saved.mutationDescription && (
+                      <code>Changed only: {saved.mutationDescription}</code>
+                    )}
+                    <small>
+                      {saved.evidenceCount} hash-linked evidence records saved
+                    </small>
+                  </div>
+                )}
+              </ExperimentStep>
+            </div>
+            {recommendations[0] && (
+              <button
+                className="lesson-link"
+                onClick={() => onLesson(recommendations[0]!.lesson)}
+              >
+                LEARN: {recommendations[0].lesson.title} <span>-&gt;</span>
+              </button>
+            )}
+          </>
+        ) : (
+          <Empty text="Import a HAR and select an endpoint node." />
+        )}
+      </section>
+    </main>
+  );
+}
+
+function HttpInspector({
+  observation,
+  observations,
+  selectedId,
+  onSelect,
+  tab,
+  onTab,
+  diff,
+  identities,
+  onAssign,
+}: {
+  observation?: Observation;
+  observations: Observation[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  tab: "request" | "response" | "parsed" | "diff";
+  onTab: (tab: "request" | "response" | "parsed" | "diff") => void;
+  diff?: DiffView;
+  identities: Identity[];
+  onAssign: (observationId: string, identityId: string) => Promise<void>;
+}) {
+  const tabs = ["request", "response", "parsed", "diff"] as const;
+  return (
+    <section className="http-inspector">
+      <div className="inspector-heading">
+        <div>
+          <span>IMPORTED TRANSACTION</span>
+          <h2>HTTP inspector</h2>
+        </div>
+        <ObservationSelect
+          label="Observation"
+          value={selectedId || observation?.id || ""}
+          observations={observations}
+          onChange={onSelect}
+        />
+        <label className="identity-selector">
+          Observed as
+          <select
+            aria-label="Observed as"
+            value={observation?.identityId ?? ""}
+            disabled={!observation}
+            onChange={(event) =>
+              observation && void onAssign(observation.id, event.target.value)
+            }
+          >
+            <option value="" disabled>
+              Unassigned
+            </option>
+            {identities.map((identity) => (
+              <option key={identity.id} value={identity.id}>
+                {identity.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="identity-context">
+        <strong>
+          {observation
+            ? `${observation.method} ${observation.http?.request.target ?? observation.url}`
+            : "No observation selected"}
+        </strong>
+        <span>
+          Observed as: {identityLabel(observation?.identityId, identities)}
+        </span>
+        <span>Status: {observation?.responseStatus ?? "-"}</span>
+      </div>
+      <div
+        className="inspector-tabs"
+        role="tablist"
+        aria-label="HTTP inspector"
+      >
+        {tabs.map((item) => (
+          <button
+            role="tab"
+            aria-selected={tab === item}
+            className={tab === item ? "active" : ""}
+            key={item}
+            onClick={() => onTab(item)}
+          >
+            {item.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      <div className="inspector-content">
+        {!observation?.http ? (
+          <p className="empty">
+            This observation predates safe HTTP reconstruction.
+          </p>
+        ) : tab === "request" ? (
+          <pre>{formatRequest(observation)}</pre>
+        ) : tab === "response" ? (
+          <pre>{formatResponse(observation)}</pre>
+        ) : tab === "parsed" ? (
+          <ParsedObservation observation={observation} />
+        ) : diff ? (
+          <DeepDiffView diff={diff} />
+        ) : (
+          <div className="inspector-diff">
+            <strong>No comparison recorded for this investigation.</strong>
+            <p>
+              Choose two imported observations below to create a deterministic
+              diff.
+            </p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const AUTHORIZATION_QUESTIONS = [
+  "Does Account B receive data belonging to Account A?",
+  "Does changing identity alter access to the same object?",
+  "Can a lower-privileged identity access this endpoint?",
+  "Does the server enforce both authentication and object ownership?",
+  "Does the same resource behave differently for Anonymous vs authenticated identities?",
+];
+
+const ASSET_CATEGORIES = [
+  ["pii", "PII"],
+  ["account_data", "Account Data"],
+  ["payment_data", "Payment Data"],
+  ["credentials_secrets", "Credentials/Secrets"],
+  ["documents_files", "Documents/Files"],
+  ["administrative_function", "Administrative Function"],
+  ["internal_service_data", "Internal Service/Data"],
+  ["custom", "Custom"],
+] as const;
+const BOUNDARY_TYPES = [
+  ["browser_api", "Browser <-> API"],
+  ["public_authenticated", "Public <-> Authenticated"],
+  ["user_privileged", "User <-> Privileged/Admin"],
+  ["application_third_party", "Application <-> Third Party"],
+  ["application_internal_service", "Application <-> Internal Service"],
+  ["custom", "Custom"],
+] as const;
+const HYPOTHESIS_STATUSES = [
+  "open",
+  "investigating",
+  "supported",
+  "not_supported",
+  "needs_more_evidence",
+  "closed",
+];
+
+function ThreatAnnotations({
+  current,
+  identities,
+  assets,
+  boundaries,
+  onSaved,
+}: {
+  current: Endpoint;
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [assetLabel, setAssetLabel] = useState("");
+  const [assetCategory, setAssetCategory] = useState("pii");
+  const [assetNotes, setAssetNotes] = useState("");
+  const [editingAssetId, setEditingAssetId] = useState("");
+  const [boundaryLabel, setBoundaryLabel] = useState("");
+  const [boundaryType, setBoundaryType] = useState("browser_api");
+  const [boundaryNotes, setBoundaryNotes] = useState("");
+  const [boundarySource, setBoundarySource] = useState(
+    identities[0]?.id ?? "browser",
+  );
+  const [editingBoundaryId, setEditingBoundaryId] = useState("");
+  async function send(
+    url: string,
+    method: string,
+    body?: unknown,
+  ): Promise<void> {
+    const response = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) throw new Error("Threat annotation update failed");
+    await onSaved();
+  }
+  async function saveAsset(): Promise<void> {
+    await send(
+      editingAssetId ? `/api/assets/${editingAssetId}` : "/api/assets",
+      editingAssetId ? "PATCH" : "POST",
+      {
+        label: assetLabel,
+        category: assetCategory,
+        notes: assetNotes,
+        linkedEndpointIds: [current.id],
+      },
+    );
+    setAssetLabel("");
+    setAssetNotes("");
+    setEditingAssetId("");
+  }
+  async function saveBoundary(): Promise<void> {
+    await send(
+      editingBoundaryId
+        ? `/api/trust-boundaries/${editingBoundaryId}`
+        : "/api/trust-boundaries",
+      editingBoundaryId ? "PATCH" : "POST",
+      {
+        label: boundaryLabel,
+        type: boundaryType,
+        notes: boundaryNotes,
+        sourceRef: boundarySource,
+        destinationRef: current.id,
+      },
+    );
+    setBoundaryLabel("");
+    setBoundaryNotes("");
+    setEditingBoundaryId("");
+  }
+  return (
+    <section className="threat-annotations">
+      <div className="annotation-title">
+        <span className="eyebrow">MANUAL THREAT MAP</span>
+        <h2>Annotate boundaries and assets.</h2>
+        <p>
+          Tester-defined context only. SurfaceTrace does not infer either
+          annotation.
+        </p>
+      </div>
+      <div className="annotation-forms">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveAsset();
+          }}
+        >
+          <h3>{editingAssetId ? "EDIT ASSET" : "ADD SENSITIVE ASSET"}</h3>
+          <label>
+            Asset label
+            <input
+              aria-label="Asset label"
+              required
+              value={assetLabel}
+              onChange={(event) => setAssetLabel(event.target.value)}
+            />
+          </label>
+          <label>
+            Asset category
+            <select
+              aria-label="Asset category"
+              value={assetCategory}
+              onChange={(event) => setAssetCategory(event.target.value)}
+            >
+              {ASSET_CATEGORIES.map(([value, label]) => (
+                <option value={value} key={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Asset notes
+            <textarea
+              aria-label="Asset notes"
+              value={assetNotes}
+              onChange={(event) => setAssetNotes(event.target.value)}
+            />
+          </label>
+          <button type="submit">
+            {editingAssetId ? "SAVE ASSET" : "ADD ASSET"}
+          </button>
+        </form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveBoundary();
+          }}
+        >
+          <h3>{editingBoundaryId ? "EDIT BOUNDARY" : "ADD TRUST BOUNDARY"}</h3>
+          <label>
+            Boundary label
+            <input
+              aria-label="Boundary label"
+              required
+              value={boundaryLabel}
+              onChange={(event) => setBoundaryLabel(event.target.value)}
+            />
+          </label>
+          <label>
+            Boundary type
+            <select
+              aria-label="Boundary type"
+              value={boundaryType}
+              onChange={(event) => setBoundaryType(event.target.value)}
+            >
+              {BOUNDARY_TYPES.map(([value, label]) => (
+                <option value={value} key={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Source reference
+            <select
+              aria-label="Boundary source"
+              value={boundarySource}
+              onChange={(event) => setBoundarySource(event.target.value)}
+            >
+              {identities.map((identity) => (
+                <option value={identity.id} key={identity.id}>
+                  {identity.label}
+                </option>
+              ))}
+              <option value="browser">Browser / custom reference</option>
+            </select>
+          </label>
+          <label>
+            Boundary notes
+            <textarea
+              aria-label="Boundary notes"
+              value={boundaryNotes}
+              onChange={(event) => setBoundaryNotes(event.target.value)}
+            />
+          </label>
+          <button type="submit">
+            {editingBoundaryId ? "SAVE BOUNDARY" : "ADD BOUNDARY"}
+          </button>
+        </form>
+      </div>
+      <div className="annotation-list">
+        {assets.map((asset) => (
+          <article key={asset.id}>
+            <b>ASSET / MANUAL</b>
+            <strong>{asset.label}</strong>
+            <span>{displayValue(asset.category)}</span>
+            <button
+              onClick={() => {
+                setEditingAssetId(asset.id);
+                setAssetLabel(asset.label);
+                setAssetCategory(asset.category);
+                setAssetNotes(asset.notes ?? "");
+              }}
+            >
+              EDIT
+            </button>
+            <button
+              onClick={() => void send(`/api/assets/${asset.id}`, "DELETE")}
+            >
+              REMOVE
+            </button>
+          </article>
+        ))}
+        {boundaries.map((boundary) => (
+          <article key={boundary.id}>
+            <b>BOUNDARY / MANUAL</b>
+            <strong>{boundary.label}</strong>
+            <span>{displayValue(boundary.type)}</span>
+            <button
+              onClick={() => {
+                setEditingBoundaryId(boundary.id);
+                setBoundaryLabel(boundary.label);
+                setBoundaryType(boundary.type);
+                setBoundaryNotes(boundary.notes ?? "");
+                setBoundarySource(boundary.sourceRef);
+              }}
+            >
+              EDIT
+            </button>
+            <button
+              onClick={() =>
+                void send(`/api/trust-boundaries/${boundary.id}`, "DELETE")
+              }
+            >
+              REMOVE
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ThreatCards({
+  hypotheses,
+  endpoint,
+  inputs,
+  observations,
+  identities,
+  assets,
+  boundaries,
+  experiments,
+  evidence,
+  onSaved,
+}: {
+  hypotheses: Hypothesis[];
+  endpoint: Endpoint;
+  inputs: Input[];
+  observations: Observation[];
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  experiments: ExperimentRecord[];
+  evidence: Evidence[];
+  onSaved: () => Promise<unknown>;
+}) {
+  return (
+    <section className="threat-cards">
+      <span className="eyebrow">INFERRED SECURITY QUESTIONS</span>
+      <h2>Threat cards</h2>
+      {hypotheses.map((hypothesis) => (
+        <ThreatCard
+          key={hypothesis.id}
+          hypothesis={hypothesis}
+          endpoint={endpoint}
+          inputs={inputs}
+          observations={observations}
+          identities={identities}
+          assets={assets}
+          boundaries={boundaries}
+          experiments={experiments}
+          evidence={evidence}
+          onSaved={onSaved}
+        />
+      ))}
+    </section>
+  );
+}
+
+function ThreatCard({
+  hypothesis,
+  endpoint,
+  inputs,
+  observations,
+  identities,
+  assets,
+  boundaries,
+  experiments,
+  evidence,
+  onSaved,
+}: {
+  hypothesis: Hypothesis;
+  endpoint: Endpoint;
+  inputs: Input[];
+  observations: Observation[];
+  identities: Identity[];
+  assets: AssetAnnotation[];
+  boundaries: BoundaryAnnotation[];
+  experiments: ExperimentRecord[];
+  evidence: Evidence[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [notes, setNotes] = useState(hypothesis.notes ?? "");
+  const relatedAssets = assets.filter((item) =>
+    item.linkedEndpointIds.includes(endpoint.id),
+  );
+  const relatedBoundaries = boundaries.filter(
+    (item) =>
+      item.destinationRef === endpoint.id || item.sourceRef === endpoint.id,
+  );
+  const relatedExperiments = experiments.filter(
+    (item) => item.hypothesisId === hypothesis.id,
+  );
+  const identityNames = [
+    ...new Set(
+      observations
+        .map((item) => identityLabel(item.identityId, identities))
+        .filter((label) => label !== "Unassigned"),
+    ),
+  ];
+  async function update(body: Record<string, unknown>): Promise<void> {
+    const response = await fetch(`/api/hypotheses/${hypothesis.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error("Hypothesis update failed");
+    await onSaved();
+  }
+  return (
+    <article className="threat-card">
+      <header>
+        <span>
+          {hypothesis.reasoning ? "INFERRED REVIEW QUESTION" : "INFERRED"}
+        </span>
+        <b>PRIORITY {hypothesis.priority}</b>
+        <select
+          aria-label={`Status for ${hypothesis.question}`}
+          value={hypothesis.status}
+          onChange={(event) => void update({ status: event.target.value })}
+        >
+          {HYPOTHESIS_STATUSES.map((status) => (
+            <option value={status} key={status}>
+              {displayValue(status)}
+            </option>
+          ))}
+        </select>
+      </header>
+      {hypothesis.status === "supported" && (
+        <p className="supported-boundary">
+          Supported means evidence supports continuing this hypothesis, not a
+          confirmed vulnerability.
+        </p>
+      )}
+      <h3>QUESTION</h3>
+      <p>{hypothesis.question}</p>
+      {hypothesis.reasoning?.followUpQuestion && (
+        <p className="follow-up-question">
+          {hypothesis.reasoning.followUpQuestion}
+        </p>
+      )}
+      <dl>
+        <dt>Signal</dt>
+        <dd>{hypothesis.signal}</dd>
+        <dt>Endpoint</dt>
+        <dd>
+          {endpoint.method} {endpoint.pathTemplate} / OBSERVED
+        </dd>
+        <dt>Identity context</dt>
+        <dd>{identityNames.join(", ") || "No assigned identity"} / MANUAL</dd>
+        <dt>Related inputs</dt>
+        <dd>
+          {inputs.map((item) => `${item.location}.${item.name}`).join(", ") ||
+            "None"}{" "}
+          / OBSERVED
+        </dd>
+        {hypothesis.reasoning && (
+          <>
+            <dt>Input</dt>
+            <dd>
+              {hypothesis.reasoning.inputLocation}.
+              {hypothesis.reasoning.inputName} / OBSERVED
+            </dd>
+            <dt>Input location</dt>
+            <dd>{displayValue(hypothesis.reasoning.inputLocation)}</dd>
+            <dt>Why it was flagged</dt>
+            <dd>{hypothesis.reasoning.signalReason}</dd>
+            <dt>Review priority signal</dt>
+            <dd>{displayValue(hypothesis.reasoning.signalStrength)} signal</dd>
+            <dt>Value class</dt>
+            <dd>{hypothesis.reasoning.valueClass ?? "Not established"}</dd>
+          </>
+        )}
+        <dt>Related assets</dt>
+        <dd>
+          {relatedAssets.map((item) => item.label).join(", ") || "None"} /
+          MANUAL
+        </dd>
+        <dt>Trust boundaries</dt>
+        <dd>
+          {relatedBoundaries.map((item) => item.label).join(", ") || "None"} /
+          MANUAL
+        </dd>
+        <dt>Linked experiments</dt>
+        <dd>
+          {relatedExperiments
+            .map((item) => item.mutationDescription)
+            .join(", ") || "None"}
+        </dd>
+        <dt>Evidence references</dt>
+        <dd>{(hypothesis.evidenceIds ?? []).join(", ") || "None"}</dd>
+      </dl>
+      {hypothesis.reasoning?.category === "ssrf" && (
+        <aside className="teaching-context">
+          <h3>WHY THIS MATTERS</h3>
+          <p>{hypothesis.reasoning.teachingContext}</p>
+          {!relatedBoundaries.length && (
+            <p>
+              Consider manually annotating a trust boundary if the server may
+              contact an external or internal destination.
+            </p>
+          )}
+          <h3>WHAT TO DETERMINE NEXT</h3>
           <ol>
-            <li>Confirm authorized scope</li>
-            <li>Browse normally / import HAR</li>
-            <li>Review mapped endpoints, inputs, trust boundaries</li>
-            <li>Form a hypothesis</li>
-            <li>
-              Change <em>one</em> variable</li>
-            <li>Compare → investigate or move on</li>
-            <li>Evidence stays append-only and hash-linked</li>
+            {hypothesis.reasoning.nextSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
           </ol>
-        </section>
-      </main>
+        </aside>
+      )}
+      <label>
+        Hypothesis notes
+        <textarea
+          aria-label={`Notes for ${hypothesis.question}`}
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+        />
+      </label>
+      <div className="threat-actions">
+        <button onClick={() => void update({ notes })}>
+          SAVE HYPOTHESIS NOTES
+        </button>
+        <button
+          onClick={() =>
+            void update({
+              observationIds: observations.map((item) => item.id),
+              experimentIds: relatedExperiments.map((item) => item.id),
+              assetIds: relatedAssets.map((item) => item.id),
+              trustBoundaryIds: relatedBoundaries.map((item) => item.id),
+              evidenceIds: evidence.map((item) => item.id),
+              notes,
+            })
+          }
+        >
+          LINK CURRENT CONTEXT
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function IdentityComparison({
+  endpoint,
+  observations,
+  identities,
+  hypothesisId,
+  onSaved,
+}: {
+  endpoint: Endpoint;
+  observations: Observation[];
+  identities: Identity[];
+  hypothesisId?: string;
+  onSaved: () => Promise<unknown>;
+}) {
+  const assigned = observations.filter((item) => item.identityId);
+  const [baselineId, setBaselineId] = useState("");
+  const [comparisonId, setComparisonId] = useState("");
+  const [result, setResult] = useState<{
+    diff: DiffView;
+    controlled: boolean;
+  } | null>(null);
+  const baseline = observations.find((item) => item.id === baselineId);
+  const comparison = observations.find((item) => item.id === comparisonId);
+  const baselineIdentity = identities.find(
+    (item) => item.id === baseline?.identityId,
+  );
+  const comparisonIdentity = identities.find(
+    (item) => item.id === comparison?.identityId,
+  );
+  const controlled =
+    baseline && comparison ? requestsMatch(baseline, comparison) : false;
+
+  async function compare(): Promise<void> {
+    if (
+      !baseline ||
+      !comparison ||
+      !baselineIdentity ||
+      !comparisonIdentity ||
+      !hypothesisId
+    )
+      return;
+    const response = await fetch("/api/experiments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        endpointId: endpoint.id,
+        hypothesisId,
+        baselineObservationId: baseline.id,
+        resultObservationId: comparison.id,
+        mutation: {
+          identity: {
+            fromRole: baselineIdentity.role,
+            toRole: comparisonIdentity.role,
+          },
+        },
+        notes: "Manual cross-identity comparison of imported observations",
+      }),
+    });
+    const data = (await response.json()) as {
+      error?: string;
+      diff?: DiffView;
+    };
+    if (!response.ok || !data.diff)
+      throw new Error(data.error ?? "Identity comparison failed");
+    setResult({ diff: data.diff, controlled });
+    await onSaved();
+  }
+
+  return (
+    <section className="identity-comparison">
+      <span className="eyebrow">AUTHORIZATION EXPERIMENT</span>
+      <h2>Compare captured identities.</h2>
+      <p>
+        Imported observations only. SurfaceTrace asks questions; it does not
+        make a vulnerability verdict.
+      </p>
+      <div className="identity-pair">
+        <ObservationSelect
+          label="Identity baseline observation"
+          value={baselineId}
+          observations={assigned}
+          onChange={setBaselineId}
+        />
+        <ObservationSelect
+          label="Identity comparison observation"
+          value={comparisonId}
+          observations={assigned.filter((item) => item.id !== baselineId)}
+          onChange={setComparisonId}
+        />
+      </div>
+      {baseline && (
+        <p>
+          <b>Baseline identity:</b>{" "}
+          {identityLabel(baseline.identityId, identities)}
+        </p>
+      )}
+      {comparison && (
+        <p>
+          <b>Comparison identity:</b>{" "}
+          {identityLabel(comparison.identityId, identities)}
+        </p>
+      )}
+      {baselineIdentity && comparisonIdentity && (
+        <div className="identity-change">
+          <span>Identity changed</span>
+          <strong>
+            {baselineIdentity.label} -&gt; {comparisonIdentity.label}
+          </strong>
+          <small>
+            {controlled
+              ? "CONTROLLED IDENTITY COMPARISON / request difference: identity only"
+              : "OBSERVATIONAL COMPARISON / multiple differences detected"}
+          </small>
+        </div>
+      )}
+      <button
+        className="compare-button"
+        disabled={
+          !baselineIdentity ||
+          !comparisonIdentity ||
+          baselineId === comparisonId ||
+          baselineIdentity?.id === comparisonIdentity?.id ||
+          !hypothesisId
+        }
+        onClick={() => void compare()}
+      >
+        COMPARE IDENTITIES + SAVE EVIDENCE
+      </button>
+      {result && (
+        <div className="identity-diff">
+          <h3>DETERMINISTIC RESPONSE DIFF</h3>
+          <DeepDiffView diff={result.diff} />
+          <dl>
+            <dt>Status</dt>
+            <dd>
+              {baseline?.responseStatus === comparison?.responseStatus
+                ? "same"
+                : "different"}
+            </dd>
+            <dt>Headers</dt>
+            <dd>
+              {sameRecord(
+                baseline?.http?.response.headers,
+                comparison?.http?.response.headers,
+              )
+                ? "same"
+                : "different"}
+            </dd>
+            <dt>Body shape / fields</dt>
+            <dd>
+              {baseline?.responseBodyShape === comparison?.responseBodyShape
+                ? "same"
+                : "different"}
+            </dd>
+          </dl>
+        </div>
+      )}
+      <div className="authorization-questions">
+        <h3>AUTHORIZATION REVIEW QUESTIONS</h3>
+        {AUTHORIZATION_QUESTIONS.map((question) => (
+          <p key={question}>{question}</p>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const EXPERIMENT_STATUS_OPTIONS = [
+  "open",
+  "investigating",
+  "same",
+  "different",
+  "needs_review",
+  "candidate_finding",
+  "closed",
+];
+const CONCLUSION_OPTIONS = [
+  ["no_meaningful_difference", "No meaningful difference"],
+  ["expected_difference", "Expected difference"],
+  ["unexpected_difference", "Unexpected difference"],
+  ["needs_more_testing", "Needs more testing"],
+  ["potential_security_issue", "Potential security issue"],
+  ["not_reproducible", "Not reproducible"],
+] as const;
+
+function ExperimentNotebook({
+  experiments,
+  endpoints,
+  hypotheses,
+  observations,
+  identities,
+  onSaved,
+}: {
+  experiments: ExperimentRecord[];
+  endpoints: Endpoint[];
+  hypotheses: Hypothesis[];
+  observations: Observation[];
+  identities: Identity[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [statusFilter, setStatusFilter] = useState("");
+  const [endpointFilter, setEndpointFilter] = useState("");
+  const [identityFilter, setIdentityFilter] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [notes, setNotes] = useState(() => experiments[0]?.notes ?? "");
+  const filtered = experiments.filter(
+    (item) =>
+      (!statusFilter || item.status === statusFilter) &&
+      (!endpointFilter || item.endpointId === endpointFilter) &&
+      (!identityFilter ||
+        item.baselineIdentityId === identityFilter ||
+        item.resultIdentityId === identityFilter),
+  );
+  const selected =
+    experiments.find((item) => item.id === selectedId) ?? filtered[0];
+
+  async function update(changes: Record<string, unknown>): Promise<void> {
+    if (!selected) return;
+    const response = await fetch(`/api/experiments/${selected.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    });
+    if (!response.ok) throw new Error("Experiment update failed");
+    await onSaved();
+  }
+
+  return (
+    <section className="experiment-notebook">
+      <div className="notebook-title">
+        <span className="eyebrow">EXPERIMENT NOTEBOOK</span>
+        <h2>Review the investigation record.</h2>
+      </div>
+      <div className="experiment-filters">
+        <label>
+          Status
+          <select
+            aria-label="Filter experiments by status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="">All statuses</option>
+            {EXPERIMENT_STATUS_OPTIONS.map((status) => (
+              <option value={status} key={status}>
+                {displayValue(status)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Endpoint
+          <select
+            aria-label="Filter experiments by endpoint"
+            value={endpointFilter}
+            onChange={(event) => setEndpointFilter(event.target.value)}
+          >
+            <option value="">All endpoints</option>
+            {endpoints.map((endpoint) => (
+              <option value={endpoint.id} key={endpoint.id}>
+                {endpoint.method} {endpoint.pathTemplate}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Identity
+          <select
+            aria-label="Filter experiments by identity"
+            value={identityFilter}
+            onChange={(event) => setIdentityFilter(event.target.value)}
+          >
+            <option value="">All identities</option>
+            {identities.map((identity) => (
+              <option value={identity.id} key={identity.id}>
+                {identity.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="notebook-layout">
+        <div className="experiment-list">
+          {filtered.map((item) => (
+            <button
+              className={selected?.id === item.id ? "selected" : ""}
+              key={item.id}
+              onClick={() => {
+                setSelectedId(item.id);
+                setNotes(item.notes ?? "");
+              }}
+            >
+              <strong>{endpointLabel(item.endpointId, endpoints)}</strong>
+              <span>{item.mutationDescription}</span>
+              <small>
+                {displayValue(item.status)} / {item.diff.summary}
+              </small>
+              <small>
+                {item.conclusion
+                  ? displayValue(item.conclusion)
+                  : "No tester conclusion"}{" "}
+                / {item.createdAt}
+              </small>
+            </button>
+          ))}
+          {!filtered.length && <p>No experiments match these filters.</p>}
+        </div>
+        {selected && (
+          <ExperimentDetail
+            experiment={selected}
+            endpoints={endpoints}
+            hypotheses={hypotheses}
+            observations={observations}
+            identities={identities}
+            notes={notes}
+            onNotes={setNotes}
+            onUpdate={update}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ExperimentDetail({
+  experiment,
+  endpoints,
+  hypotheses,
+  observations,
+  identities,
+  notes,
+  onNotes,
+  onUpdate,
+}: {
+  experiment: ExperimentRecord;
+  endpoints: Endpoint[];
+  hypotheses: Hypothesis[];
+  observations: Observation[];
+  identities: Identity[];
+  notes: string;
+  onNotes: (value: string) => void;
+  onUpdate: (changes: Record<string, unknown>) => Promise<void>;
+}) {
+  const baseline = observations.find(
+    (item) => item.id === experiment.baselineObservationId,
+  );
+  const result = observations.find(
+    (item) => item.id === experiment.resultObservationId,
+  );
+  const hypothesis = hypotheses.find(
+    (item) => item.id === experiment.hypothesisId,
+  );
+  return (
+    <article className="experiment-detail">
+      <header>
+        <span>{endpointLabel(experiment.endpointId, endpoints)}</span>
+        <strong>{displayValue(experiment.status)}</strong>
+      </header>
+      {experiment.status === "candidate_finding" && (
+        <p className="candidate-boundary">
+          Candidate finding - requires reproduction and tester validation.
+        </p>
+      )}
+      <h3>HYPOTHESIS</h3>
+      <p>{hypothesis?.question ?? "Referenced hypothesis unavailable"}</p>
+      <h3>IDENTITY CONTEXT</h3>
+      <p>
+        {identityLabel(experiment.baselineIdentityId, identities)} -&gt;{" "}
+        {identityLabel(experiment.resultIdentityId, identities)}
+      </p>
+      <h3>BASELINE REQUEST</h3>
+      <pre>
+        {baseline?.http ? formatRequest(baseline) : "Observation unavailable"}
+      </pre>
+      <h3>CHANGED VARIABLE</h3>
+      <div className="changed-only">
+        <b>
+          {experiment.comparisonClassification === "controlled"
+            ? "Changed only:"
+            : "Controlled experiment: NO"}
+        </b>
+        <code>{experiment.mutationDescription}</code>
+        {experiment.requestDifferences.length > 0 && (
+          <>
+            <span>Multiple request differences detected:</span>
+            <ul>
+              {experiment.requestDifferences.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+      <h3>COMPARISON REQUEST</h3>
+      <pre>
+        {result?.http ? formatRequest(result) : "Observation unavailable"}
+      </pre>
+      <h3>DIFF</h3>
+      <DeepDiffView diff={experiment.diff} />
+      <h3>TESTER CONCLUSION</h3>
+      <select
+        aria-label="Tester conclusion"
+        value={experiment.conclusion ?? ""}
+        onChange={(event) =>
+          void onUpdate({ conclusion: event.target.value || null })
+        }
+      >
+        <option value="">No conclusion selected</option>
+        {CONCLUSION_OPTIONS.map(([value, label]) => (
+          <option value={value} key={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <h3>NOTES</h3>
+      <textarea
+        aria-label="Experiment notes"
+        value={notes}
+        onChange={(event) => onNotes(event.target.value)}
+      />
+      <button onClick={() => void onUpdate({ notes })}>SAVE NOTES</button>
+      <h3>STATUS</h3>
+      <select
+        aria-label="Experiment status"
+        value={experiment.status}
+        onChange={(event) => void onUpdate({ status: event.target.value })}
+      >
+        {EXPERIMENT_STATUS_OPTIONS.map((status) => (
+          <option value={status} key={status}>
+            {displayValue(status)}
+          </option>
+        ))}
+      </select>
+      <h3>EVIDENCE</h3>
+      <ul>
+        {experiment.evidenceIds.map((id) => (
+          <li key={id}>
+            <code>{id}</code>
+          </li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function ActiveReplay({
+  observations,
+  inputs,
+  hypotheses,
+  onSaved,
+}: {
+  observations: Observation[];
+  inputs: Input[];
+  hypotheses: Hypothesis[];
+  onSaved: () => Promise<unknown>;
+}) {
+  const [baselineId, setBaselineId] = useState("");
+  const [inputId, setInputId] = useState("");
+  const [fromValue, setFromValue] = useState("");
+  const [toValue, setToValue] = useState("");
+  const [preview, setPreview] = useState<ReplayPreview | null>(null);
+  const [result, setResult] = useState<{
+    diff: DiffView;
+    response: {
+      status: number;
+      timingMs: number;
+      size: number;
+      truncated: boolean;
+    };
+    redirect: {
+      proposed: string;
+      followed: false;
+      approvalRequired: true;
+    } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedInput = inputs.find((item) => item.id === inputId);
+
+  function mutation() {
+    if (!selectedInput) return null;
+    const detail = { name: selectedInput.name, from: fromValue, to: toValue };
+    if (selectedInput.location === "path") return { pathParam: detail };
+    if (selectedInput.location === "query") return { queryParam: detail };
+    if (["header", "cookie"].includes(selectedInput.location))
+      return { header: detail };
+    return {
+      bodyField: { path: selectedInput.name, from: fromValue, to: toValue },
+    };
+  }
+
+  async function prepare() {
+    const changed = mutation();
+    if (!changed) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const response = await fetch("/api/replay/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baselineObservationId: baselineId,
+          hypothesisId: hypotheses[0]?.id ?? null,
+          mutation: changed,
+        }),
+      });
+      const data = (await response.json()) as ReplayPreview & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(data.error ?? `HTTP ${response.status}`);
+      setPreview(data);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel() {
+    if (!preview?.token) return;
+    await fetch(`/api/replay/${preview.token}/cancel`, { method: "POST" });
+    setPreview(null);
+  }
+
+  async function send() {
+    if (!preview?.token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/replay/${preview.token}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approval: true }),
+      });
+      const data = (await response.json()) as typeof result & {
+        error?: string;
+      };
+      if (!response.ok || !data?.diff)
+        throw new Error(data?.error ?? `HTTP ${response.status}`);
+      setResult(data);
+      setPreview(null);
+      await onSaved();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="active-replay">
+      <header>
+        <span>ACTIVE REQUEST</span>
+        <h2>Preview. Approve. Send once.</h2>
+        <p>
+          No redirect follows and no retries. Scope and rate gates are rechecked
+          at send time.
+        </p>
+      </header>
+      {!preview && !result && (
+        <div className="replay-form">
+          <ObservationSelect
+            label="Known baseline"
+            value={baselineId}
+            observations={observations}
+            onChange={setBaselineId}
+          />
+          <label>
+            One changed input
+            <select
+              value={inputId}
+              onChange={(event) => setInputId(event.target.value)}
+            >
+              <option value="">Select one input</option>
+              {inputs.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.location}: {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="value-pair">
+            <label>
+              Known value
+              <input
+                value={fromValue}
+                onChange={(event) => setFromValue(event.target.value)}
+              />
+            </label>
+            <span>TO</span>
+            <label>
+              Proposed value
+              <input
+                value={toValue}
+                onChange={(event) => setToValue(event.target.value)}
+              />
+            </label>
+          </div>
+          <button
+            className="compare-button"
+            disabled={busy || !baselineId || !inputId || !fromValue || !toValue}
+            onClick={() => void prepare()}
+          >
+            {busy ? "PREPARING..." : "PREVIEW ACTIVE REQUEST"}
+          </button>
+        </div>
+      )}
+      {preview && (
+        <div className="replay-preview">
+          <div className="replay-gates">
+            <strong>
+              {preview.scopeDecision.allowed ? "SCOPE ALLOWED" : "SCOPE DENIED"}
+            </strong>
+            <span>
+              {preview.rateAvailable ? "RATE AVAILABLE" : "RATE EXHAUSTED"}
+            </span>
+          </div>
+          <p>
+            Changed only: <code>{preview.changedOnly}</code>
+          </p>
+          <RequestPreview title="KNOWN BASELINE" request={preview.baseline} />
+          <RequestPreview title="OUTBOUND PREVIEW" request={preview.preview} />
+          <div className="replay-actions">
+            {preview.token && (
+              <button onClick={() => void cancel()}>CANCEL</button>
+            )}
+            {preview.token && (
+              <button
+                className="send-request"
+                disabled={busy}
+                onClick={() => void send()}
+              >
+                SEND THIS REQUEST
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {result && (
+        <div className="replay-result">
+          <strong>RESPONSE {result.response.status}</strong>
+          <span>
+            {result.response.timingMs} ms / {result.response.size} bytes
+            {result.response.truncated ? " / truncated" : ""}
+          </span>
+          {result.redirect && (
+            <p>
+              Redirect proposed: <code>{result.redirect.proposed}</code>. Not
+              followed; separate approval required.
+            </p>
+          )}
+          <DeepDiffView diff={result.diff} />
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+    </section>
+  );
+}
+
+function RequestPreview({
+  title,
+  request,
+}: {
+  title: string;
+  request: ReplayPreview["preview"];
+}) {
+  return (
+    <article className="request-preview">
+      <span>{title}</span>
+      <strong>
+        {request.method} {request.url}
+      </strong>
+      <pre>
+        {JSON.stringify(
+          { headers: request.headers, body: request.body },
+          null,
+          2,
+        )}
+      </pre>
+    </article>
+  );
+}
+
+function DeepDiffView({ diff }: { diff: DiffView }) {
+  const changes = diff.bodyChanges ?? [];
+  return (
+    <section className="deep-diff">
+      <div className="deep-diff-summary">
+        <strong>SUMMARY</strong>
+        <p>{diff.summary}</p>
+        {diff.truncated && <span>Truncated: {diff.truncationReason}</span>}
+      </div>
+      <div className="diff-facts">
+        <div>
+          <b>STATUS</b>
+          <span>
+            {diff.statusChanged
+              ? `${diff.statusFrom} -&gt; ${diff.statusTo}`
+              : "same"}
+          </span>
+        </div>
+        <div>
+          <b>HEADERS</b>
+          <span>
+            {diff.headerChanges?.length
+              ? diff.headerChanges.join(", ")
+              : "same"}
+          </span>
+        </div>
+        <div>
+          <b>BODY SHAPE</b>
+          <span>
+            {diff.bodyComparison ?? (changes.length ? "different" : "same")}
+          </span>
+        </div>
+        <div>
+          <b>FIELDS CHANGED</b>
+          <span>{diff.bodyChangeCount ?? changes.length}</span>
+        </div>
+      </div>
+      <div className="field-changes">
+        {changes.map((change, index) => (
+          <details open key={`${change.path}:${change.changeType}:${index}`}>
+            <summary>
+              <code>{change.path}</code>
+              <span>{displayValue(change.changeType)}</span>
+            </summary>
+            <dl>
+              <dt>Before</dt>
+              <dd>
+                <code>{displayDiffValue(change.before)}</code>
+              </dd>
+              <dt>After</dt>
+              <dd>
+                <code>{displayDiffValue(change.after)}</code>
+              </dd>
+            </dl>
+          </details>
+        ))}
+        {!changes.length && <p>No nested JSON field changes recorded.</p>}
+      </div>
+    </section>
+  );
+}
+
+function displayDiffValue(value: unknown): string {
+  return value === undefined
+    ? "(absent)"
+    : (JSON.stringify(value) ?? String(value));
+}
+
+function graphNodeLabel(id: string, graph?: GraphView): string {
+  return graph?.nodes.find((node) => node.id === id)?.label ?? id;
+}
+function endpointLabel(endpointId: string, endpoints: Endpoint[]): string {
+  const endpoint = endpoints.find((item) => item.id === endpointId);
+  return endpoint ? `${endpoint.method} ${endpoint.pathTemplate}` : endpointId;
+}
+function displayValue(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function identityLabel(
+  identityId: string | null | undefined,
+  identities: Identity[],
+): string {
+  return (
+    identities.find((item) => item.id === identityId)?.label ?? "Unassigned"
+  );
+}
+function sameRecord(
+  left?: Record<string, string>,
+  right?: Record<string, string>,
+): boolean {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+}
+function requestsMatch(left: Observation, right: Observation): boolean {
+  if (
+    !left.http ||
+    !right.http ||
+    left.method !== right.method ||
+    left.http.request.target !== right.http.request.target ||
+    left.http.request.body !== right.http.request.body
+  )
+    return false;
+  const ordinary = (headers: Record<string, string>) =>
+    Object.fromEntries(
+      Object.entries(headers).filter(
+        ([name]) => !["authorization", "cookie"].includes(name.toLowerCase()),
+      ),
+    );
+  return sameRecord(
+    ordinary(left.http.request.headers),
+    ordinary(right.http.request.headers),
+  );
+}
+
+function formatRequest(observation: Observation): string {
+  const request = observation.http!.request;
+  const lines = [
+    `${observation.method} ${request.target} ${request.httpVersion}`,
+    ...Object.entries(request.headers).map(
+      ([name, value]) => `${name}: ${value}`,
+    ),
+  ];
+  if (request.body !== null) lines.push("", request.body);
+  return lines.join("\n");
+}
+
+function formatResponse(observation: Observation): string {
+  const response = observation.http!.response;
+  const lines = [
+    `${response.httpVersion} ${response.status} ${response.statusText}`,
+    ...Object.entries(response.headers).map(
+      ([name, value]) => `${name}: ${value}`,
+    ),
+  ];
+  if (response.body !== null) lines.push("", response.body);
+  return lines.join("\n");
+}
+
+function ParsedObservation({ observation }: { observation: Observation }) {
+  return (
+    <div className="parsed-http">
+      <dl>
+        <dt>Method</dt>
+        <dd>{observation.method}</dd>
+        <dt>Path</dt>
+        <dd>
+          <code>{observation.http!.request.target}</code>
+        </dd>
+      </dl>
+      <h3>INPUTS</h3>
+      {observation.parsedInputs?.length ? (
+        <ul>
+          {observation.parsedInputs.map((input) => (
+            <li key={`${input.location}:${input.name}`}>
+              <code>{parsedInputName(input.location, input.name)}</code>
+              <span>
+                {input.type}
+                {input.sensitive ? " / redacted" : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No inputs parsed from this observation.</p>
+      )}
     </div>
+  );
+}
+
+function parsedInputName(location: string, name: string): string {
+  const prefix =
+    location === "body-json" || location === "body-form" ? "body" : location;
+  return `${prefix}.${name}`;
+}
+
+function ExperimentStep({
+  n,
+  title,
+  complete,
+  children,
+}: {
+  n: string;
+  title: string;
+  complete: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`experiment-step ${complete ? "complete" : ""}`}>
+      <header>
+        <span>{n}</span>
+        <strong>{title}</strong>
+        <i>{complete ? "READY" : "PENDING"}</i>
+      </header>
+      <div>{children}</div>
+    </section>
+  );
+}
+function ObservationSelect({
+  label,
+  value,
+  observations,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  observations: Observation[];
+  onChange: (id: string) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">Select an imported observation</option>
+        {observations.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.url} / {item.responseStatus} / {item.responseSize} bytes
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function Classroom({
+  selected,
+  skills,
+  onOpen,
+  onSkill,
+  onReturn,
+  recommendation,
+}: {
+  selected?: Lesson;
+  skills: Record<string, SkillState>;
+  onOpen: (lesson: Lesson) => void;
+  onSkill: (id: string, state: SkillState) => void;
+  onReturn: () => void;
+  recommendation?: ReturnType<typeof recommendLessons>[number];
+}) {
+  if (selected)
+    return (
+      <main className="lesson-page reveal">
+        <button className="back" onClick={onReturn}>
+          &lt;- RETURN TO INVESTIGATION
+        </button>
+        <span className="eyebrow">
+          {selected.track} / {selected.estimatedMinutes} MIN
+        </span>
+        <h1>{selected.title}</h1>
+        {selected.content ? (
+          <div className="lesson-steps">
+            <LessonStep
+              n="01"
+              title="CONCEPT"
+              text={selected.content.concept}
+            />
+            <LessonStep
+              n="02"
+              title="SIMPLE EXAMPLE"
+              text={selected.content.example}
+              code
+            />
+            <LessonStep
+              n="03"
+              title="BUG-HUNTER CONNECTION"
+              text={selected.content.connection}
+            />
+            <LessonStep
+              n="04"
+              title="READ THIS"
+              text={selected.content.inspect}
+              code
+            />
+            <LessonStep
+              n="05"
+              title="TRY IT YOURSELF"
+              text={selected.exercise ?? "Inspect an example."}
+            />
+            <LessonStep
+              n="06"
+              title="QUICK CHECK"
+              text={selected.quickCheck ?? "Explain the concept."}
+            />
+            <LessonStep
+              n="07"
+              title="APPLY IN SURFACETRACE"
+              text={selected.content.apply}
+            />
+          </div>
+        ) : (
+          <p className="coming">
+            SYLLABUS OUTLINE ONLY. This topic is mapped, but it is not a
+            complete lesson in this version. Use the Course and Run Manual for
+            the complete beginner path; do not mark this outline as practiced
+            until you learn it from a trusted source.
+          </p>
+        )}
+        {selected.content && (
+          <div className="skill-actions">
+            <button onClick={() => onSkill(selected.id, "Comfortable")}>
+              I UNDERSTAND THIS
+            </button>
+            <button onClick={() => onSkill(selected.id, "Learning")}>
+              I NEED MORE PRACTICE
+            </button>
+            <span>{skills[selected.id] ?? "Not Started"}</span>
+          </div>
+        )}
+      </main>
+    );
+  return (
+    <main className="classroom-home reveal">
+      <div className="classroom-hero">
+        <span className="eyebrow">CLASSROOM / LOCAL PROGRESS</span>
+        <h1>Learn what the traffic is telling you.</h1>
+        <p>
+          Eight complete lessons bridge code, HTTP, application behavior, and
+          security reasoning. The remaining catalog entries are syllabus
+          outlines, not finished lessons; use the Course and Run Manual for the
+          complete beginner path.
+        </p>
+        {recommendation && (
+          <button
+            className="action coral"
+            onClick={() => onOpen(recommendation.lesson)}
+          >
+            RECOMMENDED: {recommendation.lesson.title} -&gt;
+          </button>
+        )}
+      </div>
+      {trackNames.map((track) => {
+        const lessons = curriculum.filter((item) => item.track === track);
+        const complete = lessons.filter(
+          (item) => skills[item.id] === "Comfortable",
+        ).length;
+        return (
+          <section className="track" key={track}>
+            <div>
+              <span>
+                {String(trackNames.indexOf(track) + 1).padStart(2, "0")}
+              </span>
+              <h2>{track}</h2>
+              <small>
+                {complete} / {lessons.length} comfortable
+              </small>
+            </div>
+            <div className="lesson-list">
+              {lessons.map((item) => (
+                <button key={item.id} onClick={() => onOpen(item)}>
+                  <span>{item.title}</span>
+                  <small>{skills[item.id] ?? "Not Started"}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </main>
+  );
+}
+
+function EvidenceView({
+  evidence,
+  observations,
+}: {
+  evidence: Evidence[];
+  observations: Observation[];
+}) {
+  return (
+    <main className="evidence-page reveal">
+      <span className="eyebrow">APPEND-ONLY / HASH-LINKED</span>
+      <h1>Evidence ledger</h1>
+      <p>
+        Observations, hypotheses, experiments, diffs, and conclusions remain
+        distinct.
+      </p>
+      <div className="ledger">
+        {evidence.map((item, index) => (
+          <article key={item.id}>
+            <b>{String(index + 1).padStart(2, "0")}</b>
+            <div>
+              <strong>{item.kind.toUpperCase()}</strong>
+              <code>{item.contentHash}</code>
+              <small>{item.createdAt}</small>
+            </div>
+          </article>
+        ))}
+        {!evidence.length && (
+          <Empty text="The first normalized import will create an evidence record." />
+        )}
+      </div>
+      <h2>NORMALIZED OBSERVATIONS</h2>
+      {observations.map((item) => (
+        <div className="observation" key={item.id}>
+          <b>{item.method}</b>
+          <code>{item.url}</code>
+          <span>{item.responseStatus}</span>
+        </div>
+      ))}
+    </main>
+  );
+}
+function PanelLabel({ number, label }: { number: string; label: string }) {
+  return (
+    <div className="panel-label">
+      <span>{number}</span>
+      <strong>{label}</strong>
+    </div>
+  );
+}
+function Metric({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="metric">
+      <strong>{String(value).padStart(2, "0")}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+function Empty({ text }: { text: string }) {
+  return <p className="empty">{text}</p>;
+}
+function LessonStep({
+  n,
+  title,
+  text,
+  code = false,
+}: {
+  n: string;
+  title: string;
+  text: string;
+  code?: boolean;
+}) {
+  return (
+    <section>
+      <div>
+        <span>{n}</span>
+        <b>{title}</b>
+      </div>
+      {code ? <pre>{text}</pre> : <p>{text}</p>}
+    </section>
   );
 }

@@ -8,15 +8,21 @@
     "packages/*"
   ],
   "scripts": {
+    "check:node": "node scripts/check-node-version.mjs",
+    "prebuild": "npm run check:node",
     "build": "npm run build --workspaces --if-present",
+    "predev": "npm run check:node",
     "dev": "npm run dev --workspace=@surfacetrace/server",
-    "dev:web": "npm run dev --workspace=@surfacetrace/web",
+    "predev:web": "npm run check:node",
+    "dev:web": "npm run dev --workspace=@surfacetrace/web -- --host 0.0.0.0",
+    "pretest": "npm run check:node",
     "test": "npm run test --workspaces --if-present",
+    "pretypecheck": "npm run check:node && npm run build --workspace=@surfacetrace/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
