@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { buildApp } from "../src/app.js";
 
 const sample = readFileSync("../../fixtures/sample.har", "utf8");
@@ -232,6 +233,54 @@ describe("local API trust boundary", () => {
     }
   }, 15000);
 
+  test("persists a scope PUT without a later mutation", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-scope-put-"));
+    const dbPath = join(directory, "scope-put.db");
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    try {
+      first = buildApp({ logger: false, dbPath });
+      const updated = await first.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: {
+          active: true,
+          allowedHosts: ["example.test"],
+          allowedProtocols: ["https"],
+          allowedPorts: [443],
+          allowedPathPrefixes: ["/api/"],
+          excludedPathPrefixes: [],
+          allowedMethods: ["GET"],
+          maxRequestsPerMinute: 1,
+          stopConditions: {
+            manualStop: false,
+            maxRequestCount: null,
+            repeatedServerErrors: false,
+            authenticationLost: false,
+            customNote: null,
+          },
+          notes: "Persist this update immediately",
+        },
+      });
+      expect(updated.statusCode).toBe(200);
+      await first.close();
+      first = null;
+
+      second = buildApp({ logger: false, dbPath });
+      expect((await second.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        status: "ACTIVE_SCOPE",
+        scope: {
+          allowedHosts: ["example.test"],
+          notes: "Persist this update immediately",
+        },
+      });
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("creates a versioned local database and default project", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-schema-"));
     const dbPath = join(directory, "surfacetrace.db");
@@ -431,6 +480,172 @@ describe("local API trust boundary", () => {
     } finally {
       if (first) await first.close();
       if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses persisted investigation entity tampering", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-integrity-"));
+    const dbPath = join(directory, "integrity.db");
+    let app: ReturnType<typeof buildApp> | null = null;
+    try {
+      app = buildApp({ logger: false, dbPath });
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: sample, sourceLabel: "historical integrity baseline" },
+      });
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: sample, sourceLabel: "active integrity baseline" },
+      });
+      expect(
+        (await app.inject({ method: "GET", url: "/evidence" })).json(),
+      ).toMatchObject({ valid: true, stateAnchored: true });
+      await app.close();
+      app = null;
+
+      const database = new Database(dbPath);
+      const row = database
+        .prepare(
+          `SELECT observations.id, observations.import_id AS importId, observations.payload
+           FROM observations
+           JOIN imports ON imports.id = observations.import_id
+           WHERE imports.source_label = 'historical integrity baseline'
+           LIMIT 1`,
+        )
+        .get() as { id: string; importId: string; payload: string };
+      const payload = JSON.parse(row.payload) as {
+        responseStatus: number;
+        http: { response: { status: number } };
+      };
+      payload.responseStatus = 599;
+      payload.http.response.status = 599;
+      database
+        .prepare(
+          "UPDATE observations SET payload = ? WHERE id = ? AND import_id = ?",
+        )
+        .run(JSON.stringify(payload), row.id, row.importId);
+      database.close();
+
+      expect(() => buildApp({ logger: false, dbPath })).toThrow(
+        "Persisted investigation integrity verification failed",
+      );
+
+      const withoutPolicy = new Database(dbPath);
+      withoutPolicy.exec("DELETE FROM project_integrity_policy");
+      withoutPolicy.close();
+      expect(() => buildApp({ logger: false, dbPath })).toThrow(
+        "Missing investigation integrity policy",
+      );
+    } finally {
+      if (app) await app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("never persists encoded or transport-level credential material", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-redaction-"));
+    const dbPath = join(directory, "redaction.db");
+    const har = JSON.parse(sample) as {
+      log: {
+        entries: Array<{
+          request: {
+            method: string;
+            url: string;
+            headers: Array<{ name: string; value: string }>;
+            postData?: { mimeType: string; encoding?: string; text: string };
+          };
+          response: {
+            headers: Array<{ name: string; value: string }>;
+            content: {
+              size: number;
+              mimeType: string;
+              encoding?: string;
+              text: string;
+            };
+          };
+        }>;
+      };
+    };
+    har.log.entries = [har.log.entries[0]!];
+    const requestSecret = "encoded-request-credential";
+    const responseSecret = "encoded-response-token";
+    const encodedRequest = Buffer.from(
+      JSON.stringify({ credential: requestSecret, action: "review" }),
+    ).toString("base64");
+    const encodedResponse = Buffer.from(
+      JSON.stringify({ access_token: responseSecret, ok: true }),
+    ).toString("base64");
+    const entry = har.log.entries[0]!;
+    entry.request.method = "POST";
+    entry.request.url =
+      "https://url-user:url-password@example.test/api/projects/100?code=oauth-code";
+    entry.request.headers = [
+      { name: "Content-Type", value: "application/json" },
+      { name: "X-Amz-Security-Token", value: "aws-session-token" },
+    ];
+    entry.request.postData = {
+      mimeType: "application/json",
+      encoding: "base64",
+      text: encodedRequest,
+    };
+    entry.response.headers = [
+      {
+        name: "Location",
+        value: "https://example.test/callback?code=location-code",
+      },
+    ];
+    entry.response.content = {
+      size: encodedResponse.length,
+      mimeType: "application/json",
+      encoding: "base64",
+      text: encodedResponse,
+    };
+
+    let app: ReturnType<typeof buildApp> | null = null;
+    try {
+      app = buildApp({ logger: false, dbPath });
+      const imported = await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: JSON.stringify(har) },
+      });
+      expect(imported.statusCode).toBe(200);
+      const inventory = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).body;
+      for (const secret of [
+        requestSecret,
+        responseSecret,
+        encodedRequest,
+        encodedResponse,
+        "url-user",
+        "url-password",
+        "oauth-code",
+        "aws-session-token",
+        "location-code",
+      ])
+        expect(inventory).not.toContain(secret);
+      await app.close();
+      app = null;
+
+      const databaseText = readFileSync(dbPath).toString("utf8");
+      for (const secret of [
+        requestSecret,
+        responseSecret,
+        encodedRequest,
+        encodedResponse,
+        "url-user",
+        "url-password",
+        "oauth-code",
+        "aws-session-token",
+        "location-code",
+      ])
+        expect(databaseText).not.toContain(secret);
+    } finally {
+      if (app) await app.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
