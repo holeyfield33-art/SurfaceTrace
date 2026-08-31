@@ -27,6 +27,7 @@ import {
   type RuntimeCredential,
 } from "./replay/reconstruct.js";
 import { executeReplayRequest } from "./replay/httpClient.js";
+import { validateRuntimeCredentialHeaders } from "./replay/credentialHeaders.js";
 import type {
   Asset,
   AssetCategory,
@@ -667,9 +668,23 @@ export function buildApp(options: AppOptions = {}) {
       return reply
         .status(400)
         .send({ error: "Explicit runtime credential material is required" });
+    let validatedHeaders: Record<string, string>;
+    try {
+      validatedHeaders = validateRuntimeCredentialHeaders(
+        headers,
+        request.body.approvedApiKeyHeaderNames,
+      );
+    } catch (error) {
+      return reply.status(400).send({
+        error: error instanceof Error ? error.message : "Credential header rejected",
+      });
+    }
     runtimeCredentials.set(identity.id, {
-      headers: structuredClone(headers),
+      headers: validatedHeaders,
       cookies: structuredClone(cookies),
+      approvedApiKeyHeaderNames: [
+        ...(request.body.approvedApiKeyHeaderNames ?? []),
+      ],
     });
     return {
       identityId: identity.id,

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { redactBody, redactHeaders, sanitizeUrl } from "@surfacetrace/core";
+import { validateOutboundHeaders } from "./credentialHeaders.js";
 
 export interface ReplayHttpRequest {
   method: string;
@@ -28,6 +29,7 @@ export async function executeReplayRequest(
   request: ReplayHttpRequest,
   options: ReplayHttpOptions = {},
 ): Promise<ReplayHttpResponse> {
+  validateOutboundHeaders(request.headers);
   const url = new URL(request.url);
   if (!["http:", "https:"].includes(url.protocol))
     throw new Error("REPLAY_FAILED: unsupported protocol");
