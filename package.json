@@ -23,7 +23,7 @@
     "team:test": "node --test scripts/test/*.test.mjs",
     "pretest": "npm run check:node",
     "test": "npm run test --workspaces --if-present",
-    "pretypecheck": "npm run check:node",
+    "pretypecheck": "npm run check:node && npm run build --workspace=@surfacetrace/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "node scripts/lint-workspaces.mjs"
   },
