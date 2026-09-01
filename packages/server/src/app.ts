@@ -52,6 +52,10 @@ import {
   type ImportRecord,
   type PersistedState,
 } from "./persistence.js";
+import {
+  reconcileImportScopedState,
+  type ImportReplacementSummary,
+} from "./importLifecycle.js";
 
 interface StateIntegrityPayload {
   event: "investigation_state_anchored";
@@ -276,7 +280,7 @@ export function buildApp(options: AppOptions = {}) {
   let lastImport: ReturnType<typeof importHar> | null = null;
   let lastGraph: ReturnType<typeof buildGraph> | null = null;
   let lastHypotheses: ReturnType<typeof generateHypotheses> | null = restored
-    ?.hypotheses.length
+    ?.activeImport
     ? restored.hypotheses
     : null;
   let identities: IdentityContext[] = restored?.identities.length
@@ -388,7 +392,7 @@ export function buildApp(options: AppOptions = {}) {
       : defaultIdentities();
     assets = snapshot.assets;
     trustBoundaries = snapshot.trustBoundaries;
-    lastHypotheses = snapshot.hypotheses.length ? snapshot.hypotheses : null;
+    lastHypotheses = snapshot.activeImport ? snapshot.hypotheses : null;
     experiments = snapshot.experiments;
     ledger = restoredLedger;
     projectScope = snapshot.scope;
@@ -572,6 +576,10 @@ export function buildApp(options: AppOptions = {}) {
   app.post<{ Body: { har: string; sourceLabel?: string } }>(
     "/import/har",
     async (request, reply) => {
+      if (activeReplayRequestCount > 0)
+        return reply.status(409).send({
+          error: "HAR import is disabled while a replay is in flight",
+        });
       const { har: raw } = request.body ?? {};
       if (!raw || typeof raw !== "string")
         return reply.status(400).send({ error: "body.har (string) required" });
@@ -598,13 +606,31 @@ export function buildApp(options: AppOptions = {}) {
           detail: error instanceof Error ? error.message : String(error),
         });
       }
-      const hypotheses = generateHypotheses(
+      const generatedHypotheses = generateHypotheses(
         result.endpoints,
         result.inputs,
         result.observations,
       );
+      const previousActiveImport = activeImport;
+      const reconciled = reconcileImportScopedState({
+        previousImport: lastImport,
+        previousHypotheses: lastHypotheses,
+        nextImport: result,
+        nextHypotheses: generatedHypotheses,
+        identities,
+        assets,
+        trustBoundaries,
+        experiments,
+        evidence: ledger.all(),
+      });
       lastImport = result;
-      lastHypotheses = hypotheses;
+      lastHypotheses = reconciled.hypotheses;
+      identities = reconciled.identities;
+      assets = reconciled.assets;
+      trustBoundaries = reconciled.trustBoundaries;
+      experiments = reconciled.experiments;
+      const preparedReplaysInvalidated = preparedReplays.size;
+      preparedReplays.clear();
       activeImport = {
         id: crypto.randomUUID(),
         projectId: activeProject.id,
@@ -614,7 +640,20 @@ export function buildApp(options: AppOptions = {}) {
         sourceLabel: request.body.sourceLabel?.trim() || "HAR import",
       };
       newImportRequests.add(request);
-      for (const hypothesis of hypotheses.filter(
+      const replacement: ImportReplacementSummary | null = previousActiveImport
+        ? {
+            previousImportId: previousActiveImport.id,
+            ...reconciled.summary,
+            preparedReplaysInvalidated,
+          }
+        : null;
+      if (replacement)
+        ledger.append("note", {
+          event: "active_import_replaced",
+          activeImportId: activeImport.id,
+          ...replacement,
+        });
+      for (const hypothesis of lastHypotheses.filter(
         (item) => item.reasoning?.category === "ssrf",
       )) {
         const reasoning = hypothesis.reasoning!;
@@ -639,12 +678,13 @@ export function buildApp(options: AppOptions = {}) {
         skippedEntries: result.skippedEntries,
         endpoints: result.endpoints.length,
         inputs: result.inputs.length,
-        hypotheses: hypotheses.length,
+        hypotheses: lastHypotheses.length,
         graph: {
           nodes: lastGraph!.nodes.length,
           edges: lastGraph!.edges.length,
         },
         evidenceTip: ledger.tipHash(),
+        replacement,
       };
     },
   );
