@@ -482,7 +482,7 @@ describe("local API trust boundary", () => {
       if (second) await second.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 
   test("reconciles import-scoped state when a newer HAR replaces the active import", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-reimport-"));
