@@ -29,6 +29,19 @@ export interface GraphBuildResult {
 export function buildGraph(input: GraphBuildInput): GraphBuildResult {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const boundaries = input.trustBoundaries ?? [];
+  const boundaryRefs = new Set(
+    boundaries.flatMap((item) => [item.sourceRef, item.destinationRef]),
+  );
+  const knownNodeIds = new Set([
+    ...input.endpoints.map((item) => item.id),
+    ...input.inputs.map((item) => item.id),
+    ...(input.identities ?? []).map((item) => item.id),
+    ...(input.assets ?? []).map((item) => item.id),
+    ...boundaries.map((item) => item.id),
+    ...(input.hypotheses ?? []).map((item) => item.id),
+    ...(input.experiments ?? []).map((item) => item.id),
+  ]);
   for (const endpoint of input.endpoints)
     nodes.push({
       id: endpoint.id,
@@ -69,7 +82,7 @@ export function buildGraph(input: GraphBuildInput): GraphBuildResult {
         .filter((item) => item.identityId === identity.id)
         .map((item) => item.endpointId),
     );
-    if (!endpointIds.size) continue;
+    if (!endpointIds.size && !boundaryRefs.has(identity.id)) continue;
     nodes.push({
       id: identity.id,
       kind: "identity",
@@ -107,7 +120,17 @@ export function buildGraph(input: GraphBuildInput): GraphBuildResult {
         ),
       );
   }
-  for (const boundary of input.trustBoundaries ?? []) {
+  for (const ref of [...boundaryRefs].sort()) {
+    if (knownNodeIds.has(ref)) continue;
+    nodes.push({
+      id: ref,
+      kind: "identity",
+      label: ref === "browser" ? "Browser / custom reference" : ref,
+      provenance: "manual",
+      data: { role: "unknown", externalReference: true },
+    });
+  }
+  for (const boundary of boundaries) {
     nodes.push({
       id: boundary.id,
       kind: "trust_boundary",
