@@ -41,6 +41,43 @@ describe("SQLite persistence adapter", () => {
     persistence.close();
   });
 
+  test("selects the last inserted import when timestamps are identical", () => {
+    const persistence = new SqlitePersistence(":memory:");
+    const project = persistence.createProject("Import ordering test");
+    const state: PersistedState = {
+      project,
+      activeImport: null,
+      observations: [],
+      endpoints: [],
+      inputs: [],
+      identities: [],
+      assets: [],
+      trustBoundaries: [],
+      hypotheses: [],
+      experiments: [],
+      evidence: [],
+      scope: null,
+    };
+    const createdAt = "2026-08-31T12:00:00.000Z";
+    for (const id of ["first-import", "second-import"]) {
+      state.activeImport = {
+        id,
+        projectId: project.id,
+        createdAt,
+        observationCount: 0,
+        skippedEntryCount: 0,
+        sourceLabel: id,
+      };
+      persistence.save(state, true);
+    }
+    expect(persistence.listImports(project.id).map((item) => item.id)).toEqual([
+      "second-import",
+      "first-import",
+    ]);
+    expect(persistence.load(project.id)?.activeImport?.id).toBe("second-import");
+    persistence.close();
+  });
+
   test("rejects an unsupported schema without recreating the database", () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-version-"));
     const dbPath = join(directory, "future.db");

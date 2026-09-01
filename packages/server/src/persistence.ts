@@ -148,7 +148,7 @@ export class SqlitePersistence {
       .prepare(
         `SELECT id, project_id AS projectId, created_at AS createdAt,
       observation_count AS observationCount, skipped_entry_count AS skippedEntryCount,
-      source_label AS sourceLabel FROM imports WHERE project_id = ? ORDER BY created_at DESC`,
+      source_label AS sourceLabel FROM imports WHERE project_id = ? ORDER BY created_at DESC, rowid DESC`,
       )
       .all(projectId) as ImportRecord[];
   }
