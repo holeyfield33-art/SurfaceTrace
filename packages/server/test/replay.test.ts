@@ -963,6 +963,100 @@ describe("dedicated replay HTTP client", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   }, 20_000);
+
+  test("invalidates prepared approval tokens when the active HAR is replaced", async () => {
+    const app = buildApp({ logger: false });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/items/100?view=full`) },
+      });
+      const baseline = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await app.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: scopeConfig(Number(new URL(baseUrl).port)),
+      });
+      const prepared = await app.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: baseline.id,
+          mutation: { pathParam: { name: "id", from: "100", to: "101" } },
+        },
+      });
+      const before = requests;
+      const replaced = await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/items/200?view=full`) },
+      });
+      expect(replaced.json().replacement).toMatchObject({
+        preparedReplaysInvalidated: 1,
+      });
+      const staleApproval = await app.inject({
+        method: "POST",
+        url: `/replay/${prepared.json().token}/send`,
+        payload: { approval: true },
+      });
+      expect(staleApproval).toMatchObject({ statusCode: 404 });
+      expect(staleApproval.json()).toMatchObject({ networkRequests: 0 });
+      expect(requests).toBe(before);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("rejects HAR replacement while an approved replay is in flight", async () => {
+    const app = buildApp({ logger: false });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/slow/items/100`) },
+      });
+      const baseline = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      const scope = scopeConfig(Number(new URL(baseUrl).port));
+      scope.allowedPathPrefixes = ["/slow/items/"];
+      await app.inject({ method: "PUT", url: "/scope", payload: scope });
+      const prepared = await app.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: baseline.id,
+          mutation: { pathParam: { name: "id", from: "100", to: "101" } },
+        },
+      });
+      const before = requests;
+      const sending = app.inject({
+        method: "POST",
+        url: `/replay/${prepared.json().token}/send`,
+        payload: { approval: true },
+      });
+      for (let attempt = 0; attempt < 20 && requests === before; attempt += 1)
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 5);
+        });
+      expect(requests).toBe(before + 1);
+      const replacement = await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/items/200`) },
+      });
+      expect(replacement.statusCode).toBe(409);
+      expect(replacement.json()).toEqual({
+        error: "HAR import is disabled while a replay is in flight",
+      });
+      expect((await sending).statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 function observation(overrides: Partial<Observation> = {}): Observation {
