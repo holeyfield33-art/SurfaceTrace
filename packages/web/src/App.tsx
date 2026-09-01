@@ -164,6 +164,7 @@ interface ReplayPreview {
   scopeDecision: { allowed: boolean; reason: string };
   rateAvailable: boolean;
   approvalRequired: boolean;
+  networkRequests: 0;
 }
 interface DiffView {
   summary: string;
@@ -2867,6 +2868,7 @@ function ActiveReplay({
           <p>
             Changed only: <code>{preview.changedOnly}</code>
           </p>
+          <strong>Request sent: {preview.networkRequests === 0 ? "NO" : "YES"}</strong>
           <RequestPreview title="KNOWN BASELINE" request={preview.baseline} />
           <RequestPreview title="OUTBOUND PREVIEW" request={preview.preview} />
           <div className="replay-actions">

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import App from "../src/App";
@@ -1054,6 +1054,7 @@ describe("investigation loop", () => {
             scopeDecision: { allowed: true, reason: "in scope" },
             rateAvailable: true,
             approvalRequired: true,
+            networkRequests: 0,
           });
         if (url.endsWith("/api/replay/single-use-token/send")) {
           expect(JSON.parse(String(init?.body))).toEqual({ approval: true });
@@ -1092,6 +1093,16 @@ describe("investigation loop", () => {
       screen.getByRole("button", { name: "PREVIEW ACTIVE REQUEST" }),
     );
     expect(await screen.findByText("SCOPE ALLOWED")).toBeTruthy();
+    expect(screen.getByText("Request sent: NO")).toBeTruthy();
+    const outboundPreview = screen
+      .getByText("OUTBOUND PREVIEW")
+      .closest("article");
+    expect(outboundPreview).not.toBeNull();
+    expect(
+      within(outboundPreview!).getByText(
+        "GET https://lab.example.com/api/projects/200",
+      ),
+    ).toBeTruthy();
     expect(screen.getAllByText(/\[REDACTED\]/).length).toBeGreaterThan(0);
     expect(calls.filter((url) => url.includes("/send"))).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "SEND THIS REQUEST" }));

@@ -22,6 +22,7 @@ import {
   sanitizeUrl,
 } from "@surfacetrace/core";
 import {
+  formatRequestPreview,
   reconstructRequest,
   type ReconstructedRequest,
   type RuntimeCredential,
@@ -1213,7 +1214,7 @@ export function buildApp(options: AppOptions = {}) {
         active: true,
         outboundUrl: safeUrl,
         outboundMethod: prepared.request.method,
-        requestPreview: prepared.request.preview,
+        requestPreview: formatRequestPreview(prepared.request.preview),
         scopeDecision,
         approvedAt,
         responseTimingMs: replayResponse.timingMs,

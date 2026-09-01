@@ -115,8 +115,16 @@ describe("active replay reconstruction", () => {
       "privileged",
     );
     expect(result.headers.Authorization).toContain("runtime-only-secret");
-    expect(result.preview).not.toContain("runtime-only-secret");
-    expect(result.preview).not.toContain("runtime-cookie");
+    expect(result.preview).toMatchObject({
+      method: "POST",
+      url: expect.stringContaining("/items/100"),
+      headers: {
+        Authorization: "[REDACTED]",
+        Cookie: "[REDACTED]",
+      },
+    });
+    expect(JSON.stringify(result.preview)).not.toContain("runtime-only-secret");
+    expect(JSON.stringify(result.preview)).not.toContain("runtime-cookie");
   });
 
   test("enforces one canonical runtime credential header policy", () => {
@@ -341,6 +349,18 @@ describe("dedicated replay HTTP client", () => {
         approvalRequired: true,
         networkRequests: 0,
         scopeDecision: { allowed: true },
+        baseline: {
+          method: "GET",
+          url: expect.stringContaining("/items/100?view=full"),
+          headers: expect.any(Object),
+          body: null,
+        },
+        preview: {
+          method: "GET",
+          url: expect.stringContaining("/items/101?view=full"),
+          headers: expect.any(Object),
+          body: null,
+        },
       });
       expect(requests).toBe(before);
       const token = prepared.json().token;

@@ -4,6 +4,7 @@ import {
   describeMutation,
   redactBody,
   redactHeaders,
+  sanitizeUrl,
 } from "@surfacetrace/core";
 import type {
   ExperimentMutation,
@@ -28,9 +29,16 @@ export interface ReconstructedRequest {
   headers: Record<string, string>;
   body: string | null;
   mutationDescription: string;
-  preview: string;
-  baselinePreview: string;
+  preview: ReplayRequestPreview;
+  baselinePreview: ReplayRequestPreview;
   targetIdentityId: string | null;
+}
+
+export interface ReplayRequestPreview {
+  method: HttpMethod;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
 }
 
 export function reconstructRequest(
@@ -237,19 +245,28 @@ function contentType(headers: Record<string, string>): string {
 }
 
 function requestPreview(
-  method: string,
+  method: HttpMethod,
   urlValue: string,
   headers: Record<string, string>,
   body: string | null,
-): string {
-  const url = new URL(urlValue);
+): ReplayRequestPreview {
+  return {
+    method,
+    url: sanitizeUrl(urlValue),
+    headers,
+    body,
+  };
+}
+
+export function formatRequestPreview(preview: ReplayRequestPreview): string {
+  const url = new URL(preview.url);
   const lines = [
-    `${method} ${url.pathname}${url.search} HTTP/1.1`,
+    `${preview.method} ${url.pathname}${url.search} HTTP/1.1`,
     `Host: ${url.host}`,
-    ...Object.entries(headers)
+    ...Object.entries(preview.headers)
       .filter(([name]) => name.toLowerCase() !== "host")
       .map(([name, value]) => `${name}: ${value}`),
   ];
-  if (body !== null) lines.push("", body);
+  if (preview.body !== null) lines.push("", preview.body);
   return lines.join("\n");
 }

@@ -71,6 +71,15 @@ test("built application completes the guarded investigation workflow", async ({
   await page.getByRole("button", { name: "PREVIEW ACTIVE REQUEST" }).click();
   const firstPreview = await (await firstPreviewResponse).json();
   await expect(page.getByText("SCOPE ALLOWED")).toBeVisible();
+  await expect(page.getByText("Request sent: NO", { exact: true })).toBeVisible();
+  const outboundPreview = page
+    .locator("article.request-preview")
+    .filter({ hasText: "OUTBOUND PREVIEW" });
+  await expect(
+    outboundPreview.getByText("GET http://127.0.0.1:4040/lab/projects/200", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "CANCEL" }).click();
 
   const evidenceBefore = await authenticatedEvidence();
