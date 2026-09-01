@@ -1,6 +1,7 @@
 import { REDACTED } from "@surfacetrace/core";
 
 const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const COOKIE_VALUE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/;
 const forbidden = new Set([
   "host",
   "content-length",
@@ -67,6 +68,16 @@ export function validateRuntimeCredentialHeaders(
       throw new Error(`Credential header is not approved: ${name}`);
   }
   return structuredClone(headers);
+}
+
+export function validateRuntimeCredentialCookies(
+  cookies: Record<string, string>,
+): Record<string, string> {
+  for (const [name, value] of Object.entries(cookies)) {
+    if (!HTTP_TOKEN.test(name) || !COOKIE_VALUE.test(value))
+      throw new Error(`Runtime cookie rejected: ${JSON.stringify(name)}`);
+  }
+  return structuredClone(cookies);
 }
 
 export function mergeRuntimeCredentialHeaders(

@@ -224,12 +224,12 @@ function setJsonPath(
   if (!keys.length) throw new Error("Body mutation path is required");
   let parent: unknown = value;
   for (const key of keys.slice(0, -1)) {
-    if (!parent || typeof parent !== "object" || !(key in parent))
+    if (!hasOwnSafeField(parent, key))
       throw new Error("Declared body field was not found");
     parent = (parent as Record<string, unknown>)[key];
   }
   const key = keys.at(-1)!;
-  if (!parent || typeof parent !== "object" || !(key in parent))
+  if (!hasOwnSafeField(parent, key))
     throw new Error("Declared body field was not found");
   if (
     JSON.stringify((parent as Record<string, unknown>)[key]) !==
@@ -237,6 +237,15 @@ function setJsonPath(
   )
     throw new Error("Declared body baseline value does not match");
   (parent as Record<string, unknown>)[key] = replacement;
+}
+
+function hasOwnSafeField(value: unknown, key: string): value is object {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !["__proto__", "prototype", "constructor"].includes(key) &&
+    Object.prototype.hasOwnProperty.call(value, key)
+  );
 }
 
 function contentType(headers: Record<string, string>): string {

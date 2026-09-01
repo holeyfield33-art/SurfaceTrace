@@ -159,6 +159,25 @@ describe("active replay reconstruction", () => {
     ).toEqual({ "X-Review-Key": "runtime-secret" });
   });
 
+  test("rejects inherited JSON mutation paths without touching prototypes", () => {
+    const original = Object.prototype.toString;
+    expect(() =>
+      reconstructRequest(
+        observation(),
+        {
+          bodyField: {
+            path: "constructor.prototype.toString",
+            from: undefined,
+            to: "polluted",
+          },
+        },
+        identities,
+        new Map(),
+      ),
+    ).toThrow("Declared body field was not found");
+    expect(Object.prototype.toString).toBe(original);
+  });
+
   test("rejects credential overrides of protected reconstructed headers", () => {
     expect(() =>
       reconstructRequest(
@@ -294,6 +313,16 @@ describe("dedicated replay HTTP client", () => {
       });
       expect(unsafe.statusCode).toBe(400);
       expect(unsafe.body).not.toContain("secret.test");
+      const unsafeCookie = await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: {
+          headers: {},
+          cookies: { session: "safe; admin=true" },
+        },
+      });
+      expect(unsafeCookie.statusCode).toBe(400);
+      expect(unsafeCookie.body).not.toContain("admin=true");
       const safe = await app.inject({
         method: "PUT",
         url: "/replay/credentials/privileged",
