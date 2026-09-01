@@ -5,6 +5,8 @@ import type {
 } from "../types.js";
 
 const SUPPORTED_PROTOCOLS = new Set(["http", "https"]);
+const MAX_ENCODED_PATH_LENGTH = 8192;
+const MAX_PATH_DECODE_PASSES = 16;
 
 export interface ScopeEvaluationContext {
   rateAvailable?: boolean;
@@ -124,6 +126,10 @@ export function evaluateRedirectTarget(
 
 export class RequestBudget {
   private readonly consumed = new Map<string, number[]>();
+
+  clear(): void {
+    this.consumed.clear();
+  }
 
   canConsumeRequest(scope: ProjectScope, now = Date.now()): boolean {
     this.prune(scope.id, now);
@@ -257,12 +263,19 @@ function normalizeConfiguredPath(value: string): string {
 }
 
 function normalizePath(value: string): string {
+  if (value.length > MAX_ENCODED_PATH_LENGTH)
+    throw new Error("Candidate path is too long");
   let decoded = value;
-  for (let index = 0; index < 3; index += 1) {
+  let stable = false;
+  for (let index = 0; index < MAX_PATH_DECODE_PASSES; index += 1) {
     const next = decodeURIComponent(decoded);
-    if (next === decoded) break;
+    if (next === decoded) {
+      stable = true;
+      break;
+    }
     decoded = next;
   }
+  if (!stable) throw new Error("Candidate path encoding is too deeply nested");
   if (decoded.includes("\\") || decoded.includes("\0"))
     throw new Error("Ambiguous path");
   const segments: string[] = [];

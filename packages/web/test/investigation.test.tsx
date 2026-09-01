@@ -932,6 +932,97 @@ describe("investigation loop", () => {
     expect(screen.getByText("HOST_NOT_ALLOWED")).toBeTruthy();
   });
 
+  test("resets latched automatic scope stops independently", async () => {
+    const user = userEvent.setup();
+    let currentScope = {
+      id: "scope-stopped",
+      active: true,
+      allowedHosts: ["example.test"],
+      allowedProtocols: ["https"],
+      allowedPorts: [443],
+      allowedPathPrefixes: ["/api/"],
+      excludedPathPrefixes: [],
+      allowedMethods: ["GET"],
+      maxRequestsPerMinute: 10,
+      stopConditions: {
+        manualStop: false,
+        maxRequestCount: null,
+        requestCount: 3,
+        repeatedServerErrors: true,
+        serverErrorCount: 3,
+        authenticationLost: true,
+        customNote: null,
+      },
+      notes: null,
+    };
+    const fetchMock = vi.fn(
+      async (request: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(request);
+        if (url.endsWith("/api/scope") && !init?.method)
+          return jsonResponse({ scope: currentScope, status: "ACTIVE_SCOPE" });
+        if (url.endsWith("/api/scope/stops/reset")) {
+          const body = JSON.parse(String(init?.body)) as {
+            condition: "repeatedServerErrors" | "authenticationLost";
+          };
+          currentScope = {
+            ...currentScope,
+            stopConditions: {
+              ...currentScope.stopConditions,
+              [body.condition]: false,
+              ...(body.condition === "repeatedServerErrors"
+                ? { serverErrorCount: 0 }
+                : {}),
+            },
+          };
+          return jsonResponse({
+            reset: true,
+            wasActive: true,
+            scope: currentScope,
+          });
+        }
+        return jsonResponse({ error: "unexpected request" }, 404);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "AUTOMATIC EXECUTION STOP ACTIVE",
+    );
+    expect(screen.getByText(/3 consecutive/)).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "RESET SERVER-ERROR STOP" }),
+    );
+    expect(
+      await screen.findByText(
+        "Server-error stop reset. Recheck target health before replay.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "RESET SERVER-ERROR STOP" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "RESET AUTHENTICATION STOP" }),
+    ).toBeTruthy();
+
+    await user.click(
+      screen.getByRole("button", { name: "RESET AUTHENTICATION STOP" }),
+    );
+    expect(
+      await screen.findByText(
+        "Authentication-loss stop reset. Recheck credentials before replay.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    const resetBodies = fetchMock.mock.calls
+      .filter(([request]) => String(request).endsWith("/api/scope/stops/reset"))
+      .map(([, init]) => JSON.parse(String(init?.body)).condition);
+    expect(resetBodies).toEqual([
+      "repeatedServerErrors",
+      "authenticationLost",
+    ]);
+  });
+
   test("previews an active replay before a separate one-time send approval", async () => {
     const user = userEvent.setup();
     const calls: string[] = [];

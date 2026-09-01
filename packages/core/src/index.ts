@@ -15,6 +15,7 @@ export {
   isSensitiveQueryParam,
   sanitizeUrl,
   redactBody,
+  redactHarBody,
   REDACTED,
 } from "./har/redact.js";
 

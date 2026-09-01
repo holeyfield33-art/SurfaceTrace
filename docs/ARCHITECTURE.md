@@ -67,7 +67,7 @@ Passive comparisons stop at the experiment notebook and compare two imported obs
 
 ## Canonical Data
 
-Imported requests become redacted `Observation` records, deterministic endpoint templates, and value-free input descriptors. Supported input locations are path, query, selected headers, cookies, JSON bodies, and form bodies. Raw query secrets, cookies, credential headers, and sensitive body values do not enter canonical persistence or evidence.
+Imported requests become redacted `Observation` records, deterministic endpoint templates, and value-free input descriptors. Supported input locations are path, query, selected headers, cookies, JSON bodies, and form bodies. URL userinfo, OAuth and signature parameters, credential headers, cookies, credential fields, and sensitive body values do not enter canonical persistence or evidence. Textual base64 HAR bodies are decoded before redaction; binary, multipart, malformed, unsupported, and oversized encoded bodies are omitted rather than stored verbatim.
 
 Identity assignments are manual. Assets and trust boundaries are manual annotations. Hypotheses and SSRF reasoning are deterministic, inferred review prompts rather than findings or vulnerability verdicts.
 
@@ -75,7 +75,7 @@ Identity assignments are manual. Assets and trust boundaries are manual annotati
 
 SQLite is owned by the Fastify server. The persistence adapter stores canonical redacted observations together with projects, imports, endpoint/input inventories, identity assignments, threat annotations, hypotheses, experiments, deep diffs, project scope, and exact hash-linked evidence records.
 
-The database has an explicit schema version and supported migrations. Known versions migrate non-destructively; unknown versions fail clearly. Investigation state and evidence-chain integrity are restored and verified after server restart. Runtime replay credentials are deliberately excluded from SQLite and must be supplied again after restart.
+The database has an explicit schema version and supported migrations. Known versions migrate non-destructively; unknown versions fail clearly. Schema v3 records an external required-integrity tip and appends internal state anchors to the evidence chain. On load, SurfaceTrace verifies the chain, required tip, project binding, and active investigation-state hash; an entity edit or truncated anchor causes startup or project-open refusal. A pre-v3 project receives one baseline anchor during migration. Runtime replay credentials are deliberately excluded from SQLite, scoped to the active project, cleared on project transitions, and must be supplied again after restart.
 
 `SURFACETRACE_DB_PATH` selects the database path and defaults to `./data/surfacetrace.db`. Browser-only lesson proficiency and current UI context remain in local browser storage.
 
@@ -100,7 +100,7 @@ A redirect `Location` is redacted and evaluated independently through the scope 
 
 Replay responses cross the existing redaction boundary before becoming observations. The existing deep-diff implementation compares status, headers, nested body fields, arrays, types, and truncation state. SurfaceTrace does not maintain a parallel replay-history subsystem: approval metadata, response observations, diffs, conclusions, and evidence attach to the existing experiment notebook model.
 
-Evidence is logically append-only and hash-linked. Replay appends distinct records for preparation, scope decision, human approval, request sent, response received, and diff creation. Persistent evidence never contains runtime credential values.
+Evidence is logically append-only and hash-linked. Replay appends distinct records for preparation, scope decision, human approval, request sent, response received, and diff creation. Internal integrity records anchor the active canonical state after each durable mutation and are hidden from the learner-facing record list. Persistent evidence never contains runtime credential values.
 
 ## Safety Invariants
 
@@ -116,10 +116,14 @@ Evidence is logically append-only and hash-linked. Replay appends distinct recor
 10. Hypotheses and SSRF signals are not vulnerability verdicts.
 11. Conclusions remain human-controlled.
 12. Bulk replay, fuzzing, crawling, scanning, and autonomous exploitation are excluded.
+13. Runtime credentials, prepared tokens, graphs, and request budgets cannot cross project transitions.
+14. Persisted active investigation entities must match the required evidence-chain state anchor.
 
 ## Runtime Topology
 
-The web development and production-preview servers bind to `127.0.0.1:5173` and proxy `/api` to Fastify on `127.0.0.1:8787`. SurfaceTrace is explicitly a single-user local workspace, not a multi-tenant service. Fastify binds to loopback by default. Docker Compose keeps Fastify on container loopback and publishes only the web proxy on host loopback, while mounting the workspace, keeping dependencies in a named volume, and persisting SQLite data in the `surfacetrace-data` volume.
+Local web development and production-preview servers bind to `127.0.0.1:5173`, proxy `/api` to Fastify on `127.0.0.1:8787`, and proxy `/lab` to the controlled lab on `127.0.0.1:4040`. SurfaceTrace is explicitly a single-user local workspace, not a multi-tenant service. `npm run dev:all` supervises all three processes and tears down the remainder if one exits.
+
+Docker Compose and the development container bind only Vite to the container interface needed for forwarding. Fastify and the lab remain on container loopback, and Docker publishes only `127.0.0.1:5173` on the host. Codespaces forwards and labels all three ports for diagnostics, admits only the exact generated Vite hostname, and uses private port visibility by default; operators must keep that visibility private. The image contains locked dependencies, the workspace is mounted for development, dependencies use a named volume, and SQLite data persists in `surfacetrace-data`.
 
 An intentional non-loopback API bind requires an operator-supplied `SURFACETRACE_API_TOKEN` of at least 32 characters. Non-loopback requests must present that token as a bearer credential. This protects accidental remote exposure; it does not turn the globally active project model into a multi-user authorization architecture. Projects, observations, identities, and evidence share one local operator boundary.
 

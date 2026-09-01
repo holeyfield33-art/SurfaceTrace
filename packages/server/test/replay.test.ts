@@ -181,11 +181,21 @@ describe("dedicated replay HTTP client", () => {
   beforeAll(async () => {
     server = createServer((request, response) => {
       requests += 1;
+      if (request.url?.startsWith("/server-error/")) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end('{"error":"controlled server error"}');
+        return;
+      }
+      if (request.url?.startsWith("/unauthorized/")) {
+        response.writeHead(401, { "Content-Type": "application/json" });
+        response.end('{"error":"controlled authentication loss"}');
+        return;
+      }
       if (request.url === "/redirect") {
         response.writeHead(302, { Location: "/final" }).end();
         return;
       }
-      if (request.url === "/slow") {
+      if (request.url?.startsWith("/slow")) {
         setTimeout(() => response.end("late"), 150);
         return;
       }
@@ -534,6 +544,405 @@ describe("dedicated replay HTTP client", () => {
     expect(requests).toBe(afterBudgetRequest);
     await app.close();
   });
+
+  test("isolates runtime replay state across project transitions", async () => {
+    const app = buildApp({ logger: false });
+    try {
+      const port = Number(new URL(baseUrl).port);
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/items/100?view=full`) },
+      });
+      const projectA = (
+        await app.inject({ method: "GET", url: "/projects" })
+      ).json().activeProjectId;
+      const baselineA = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await app.inject({
+        method: "PATCH",
+        url: `/observations/${baselineA.id}/identity`,
+        payload: { identityId: "account-a" },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: { ...scopeConfig(port), maxRequestsPerMinute: 1 },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/replay/credentials/privileged",
+        payload: {
+          headers: { "X-Review-Key": "project-a-runtime-secret" },
+          cookies: {},
+          approvedApiKeyHeaderNames: ["X-Review-Key"],
+        },
+      });
+      const preparedA = await app.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: baselineA.id,
+          mutation: { identity: { fromRole: "user", toRole: "admin" } },
+          targetIdentityId: "privileged",
+        },
+      });
+      expect(preparedA.statusCode).toBe(200);
+      expect(preparedA.json().token).toBeTruthy();
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/scope/budget/consume",
+          })
+        ).statusCode,
+      ).toBe(200);
+
+      const projectB = (
+        await app.inject({
+          method: "POST",
+          url: "/projects",
+          payload: { name: "Project B" },
+        })
+      ).json();
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/projects/${projectB.id}/open`,
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (await app.inject({ method: "GET", url: "/graph" })).statusCode,
+      ).toBe(404);
+      expect((await app.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        scope: null,
+        status: "NO_ACTIVE_SCOPE",
+      });
+
+      const before = requests;
+      const staleToken = await app.inject({
+        method: "POST",
+        url: `/replay/${preparedA.json().token}/send`,
+        payload: { approval: true },
+      });
+      expect(staleToken.statusCode).toBe(404);
+      expect(requests).toBe(before);
+
+      await app.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: { ...scopeConfig(port), maxRequestsPerMinute: 1 },
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/scope/preview",
+            payload: { method: "GET", url: `${baseUrl}/items/101` },
+          })
+        ).json().decision.reasonCode,
+      ).toBe("IN_SCOPE");
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/items/100?view=full`) },
+      });
+      const baselineB = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await app.inject({
+        method: "PATCH",
+        url: `/observations/${baselineB.id}/identity`,
+        payload: { identityId: "account-a" },
+      });
+      const missingCredential = await app.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: baselineB.id,
+          mutation: { identity: { fromRole: "user", toRole: "admin" } },
+          targetIdentityId: "privileged",
+        },
+      });
+      expect(missingCredential.statusCode).toBe(400);
+      expect(missingCredential.body).toContain("credentials are unavailable");
+      expect(missingCredential.body).not.toContain("project-a-runtime-secret");
+      expect(requests).toBe(before);
+
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/projects/${projectA}/open`,
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/graph" })).statusCode).toBe(200);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/scope/preview",
+            payload: { method: "GET", url: `${baseUrl}/items/101` },
+          })
+        ).json().decision.reasonCode,
+      ).toBe("RATE_LIMIT_EXHAUSTED");
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("blocks project transitions while an approved replay is in flight", async () => {
+    const app = buildApp({ logger: false, replayTimeoutMs: 1_000 });
+    try {
+      const port = Number(new URL(baseUrl).port);
+      await app.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/slow/100`) },
+      });
+      const baseline = (
+        await app.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await app.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: {
+          ...scopeConfig(port),
+          allowedPathPrefixes: ["/slow/"],
+        },
+      });
+      const prepared = await app.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: baseline.id,
+          mutation: { pathParam: { name: "id", from: "100", to: "101" } },
+        },
+      });
+      const projectB = (
+        await app.inject({
+          method: "POST",
+          url: "/projects",
+          payload: { name: "Concurrent Project B" },
+        })
+      ).json();
+      const before = requests;
+      const sending = app.inject({
+        method: "POST",
+        url: `/replay/${prepared.json().token}/send`,
+        payload: { approval: true },
+      });
+      for (let attempt = 0; attempt < 30 && requests === before; attempt += 1)
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      expect(requests).toBe(before + 1);
+
+      const blocked = await app.inject({
+        method: "POST",
+        url: `/projects/${projectB.id}/open`,
+      });
+      expect(blocked.statusCode).toBe(409);
+      expect(blocked.json().error).toContain("replay is in flight");
+      const sent = await sending;
+      expect(sent.statusCode).toBe(200);
+      expect(sent.json().response.status).toBe(200);
+
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/projects/${projectB.id}/open`,
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (await app.inject({ method: "GET", url: "/inventory" })).statusCode,
+      ).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("latches, persists, and explicitly resets automatic replay stops", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-stops-"));
+    const dbPath = join(directory, "stops.db");
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    let third: ReturnType<typeof buildApp> | null = null;
+    try {
+      const port = Number(new URL(baseUrl).port);
+      const errorScope = {
+        ...scopeConfig(port),
+        allowedPathPrefixes: ["/server-error/"],
+        maxRequestsPerMinute: 10,
+      };
+      first = buildApp({ logger: false, dbPath });
+      await first.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/server-error/100`) },
+      });
+      const baseline = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await first.inject({ method: "PUT", url: "/scope", payload: errorScope });
+
+      for (const target of ["101", "102", "103"]) {
+        const prepared = await first.inject({
+          method: "POST",
+          url: "/replay/prepare",
+          payload: {
+            baselineObservationId: baseline.id,
+            mutation: { pathParam: { name: "id", from: "100", to: target } },
+          },
+        });
+        expect(prepared.json().token).toBeTruthy();
+        const sent = await first.inject({
+          method: "POST",
+          url: `/replay/${prepared.json().token}/send`,
+          payload: { approval: true },
+        });
+        expect(sent.statusCode).toBe(200);
+        expect(sent.json().response.status).toBe(500);
+      }
+      expect((await first.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        scope: {
+          stopConditions: {
+            repeatedServerErrors: true,
+            serverErrorCount: 3,
+          },
+        },
+      });
+      const ordinaryUpdate = await first.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: errorScope,
+      });
+      expect(
+        ordinaryUpdate.json().scope.stopConditions.repeatedServerErrors,
+      ).toBe(true);
+      expect(
+        (
+          await first.inject({
+            method: "POST",
+            url: "/scope/preview",
+            payload: { method: "GET", url: `${baseUrl}/server-error/104` },
+          })
+        ).json().decision.reasonCode,
+      ).toBe("REPEATED_SERVER_ERRORS");
+      await first.close();
+      first = null;
+
+      second = buildApp({ logger: false, dbPath });
+      expect((await second.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        scope: { stopConditions: { repeatedServerErrors: true } },
+      });
+      const resetErrors = await second.inject({
+        method: "POST",
+        url: "/scope/stops/reset",
+        payload: { condition: "repeatedServerErrors" },
+      });
+      expect(resetErrors.json()).toMatchObject({
+        reset: true,
+        wasActive: true,
+        scope: {
+          stopConditions: {
+            repeatedServerErrors: false,
+            serverErrorCount: 0,
+          },
+        },
+      });
+
+      await second.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: replayHar(`${baseUrl}/unauthorized/100`) },
+      });
+      const unauthorizedBaseline = (
+        await second.inject({ method: "GET", url: "/inventory" })
+      ).json().observations[0];
+      await second.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: {
+          ...scopeConfig(port),
+          allowedPathPrefixes: ["/unauthorized/"],
+          maxRequestsPerMinute: 10,
+        },
+      });
+      const unauthorizedPreview = await second.inject({
+        method: "POST",
+        url: "/replay/prepare",
+        payload: {
+          baselineObservationId: unauthorizedBaseline.id,
+          mutation: { pathParam: { name: "id", from: "100", to: "101" } },
+        },
+      });
+      const unauthorized = await second.inject({
+        method: "POST",
+        url: `/replay/${unauthorizedPreview.json().token}/send`,
+        payload: { approval: true },
+      });
+      expect(unauthorized.json().response.status).toBe(401);
+      expect((await second.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        scope: { stopConditions: { authenticationLost: true } },
+      });
+      const cannotSilentlyClear = await second.inject({
+        method: "PUT",
+        url: "/scope",
+        payload: {
+          ...scopeConfig(port),
+          allowedPathPrefixes: ["/unauthorized/"],
+          maxRequestsPerMinute: 10,
+        },
+      });
+      expect(
+        cannotSilentlyClear.json().scope.stopConditions.authenticationLost,
+      ).toBe(true);
+      await second.close();
+      second = null;
+
+      third = buildApp({ logger: false, dbPath });
+      expect((await third.inject({ method: "GET", url: "/scope" })).json()).toMatchObject({
+        scope: { stopConditions: { authenticationLost: true } },
+      });
+      const resetAuthentication = await third.inject({
+        method: "POST",
+        url: "/scope/stops/reset",
+        payload: { condition: "authenticationLost" },
+      });
+      expect(resetAuthentication.json()).toMatchObject({
+        reset: true,
+        wasActive: true,
+        scope: { stopConditions: { authenticationLost: false } },
+      });
+      const evidence = (
+        await third.inject({ method: "GET", url: "/evidence" })
+      ).json().records;
+      expect(
+        evidence.filter(
+          (record: { payload: { event?: string } }) =>
+            record.payload.event === "scope_stop_activated",
+        ),
+      ).toHaveLength(2);
+      expect(
+        evidence.filter(
+          (record: { payload: { event?: string } }) =>
+            record.payload.event === "scope_stop_reset",
+        ),
+      ).toHaveLength(2);
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      if (third) await third.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 function observation(overrides: Partial<Observation> = {}): Observation {

@@ -379,7 +379,13 @@ export interface EvidenceRecord {
   id: string;
   prevHash: string | null;
   contentHash: string;
-  kind: "observation" | "experiment" | "diff" | "note" | "scope";
+  kind:
+    | "observation"
+    | "experiment"
+    | "diff"
+    | "note"
+    | "scope"
+    | "integrity";
   payload: unknown;
   createdAt: string;
 }

@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
+import { hashPayload } from "@surfacetrace/core";
 import type {
   Asset,
   Endpoint,
@@ -14,7 +15,7 @@ import type {
   TrustBoundary,
 } from "@surfacetrace/core";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface ProjectRecord {
   id: string;
@@ -106,12 +107,40 @@ export class SqlitePersistence {
       createdAt: now,
       updatedAt: now,
     };
-    this.db
-      .prepare(
-        "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(project.id, project.name, project.createdAt, project.updatedAt);
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(project.id, project.name, project.createdAt, project.updatedAt);
+      this.db
+        .prepare(
+          "INSERT INTO project_integrity_policy (project_id, required, anchor_hash) VALUES (?, 0, NULL)",
+        )
+        .run(project.id);
+    })();
     return project;
+  }
+
+  integrityPolicy(projectId: string): {
+    required: boolean;
+    anchorHash: string | null;
+  } {
+    const row = this.db
+      .prepare(
+        "SELECT required, anchor_hash AS anchorHash FROM project_integrity_policy WHERE project_id = ?",
+      )
+      .get(projectId) as
+      | { required: number; anchorHash: string | null }
+      | undefined;
+    if (!row)
+      throw new Error(
+        `Missing investigation integrity policy for project ${projectId}`,
+      );
+    return {
+      required: row.required === 1,
+      anchorHash: row.anchorHash,
+    };
   }
 
   listImports(projectId: string): ImportRecord[] {
@@ -189,10 +218,56 @@ export class SqlitePersistence {
     };
   }
 
+  investigationHash(state: PersistedState): string {
+    const readImportPayloads = <T>(table: string, importId: string): T[] =>
+      (
+        this.db
+          .prepare(
+            `SELECT payload FROM ${table} WHERE import_id = ? ORDER BY row_order, id`,
+          )
+          .all(importId) as Array<{ payload: string }>
+      ).map((row) => JSON.parse(row.payload) as T);
+    const imports = this.listImports(state.project.id).map((record) => ({
+      record,
+      observations: readImportPayloads<Observation>("observations", record.id),
+      endpoints: readImportPayloads<Endpoint>("endpoints", record.id),
+      inputs: readImportPayloads<InputDescriptor>("inputs", record.id),
+    }));
+    if (state.activeImport) {
+      const active = {
+        record: state.activeImport,
+        observations: state.observations,
+        endpoints: state.endpoints,
+        inputs: state.inputs,
+      };
+      const index = imports.findIndex(
+        (item) => item.record.id === state.activeImport?.id,
+      );
+      if (index >= 0) imports[index] = active;
+      else imports.push(active);
+    }
+    imports.sort(
+      (left, right) =>
+        right.record.createdAt.localeCompare(left.record.createdAt) ||
+        left.record.id.localeCompare(right.record.id),
+    );
+    return hashPayload({
+      project: state.project,
+      imports,
+      identities: state.identities,
+      assets: state.assets,
+      trustBoundaries: state.trustBoundaries,
+      hypotheses: state.hypotheses,
+      experiments: state.experiments,
+      scope: state.scope,
+    });
+  }
+
   save(
     state: PersistedState,
     newImport = false,
     activeImportChanged = false,
+    integrityAnchorHash?: string,
   ): void {
     this.db.transaction(() => {
       this.db
@@ -318,6 +393,15 @@ export class SqlitePersistence {
               order,
               "{}",
             );
+      if (integrityAnchorHash !== undefined) {
+        const updated = this.db
+          .prepare(
+            "UPDATE project_integrity_policy SET required = 1, anchor_hash = ? WHERE project_id = ?",
+          )
+          .run(integrityAnchorHash, state.project.id);
+        if (updated.changes !== 1)
+          throw new Error("Investigation integrity policy update failed");
+      }
     })();
   }
 
@@ -354,7 +438,7 @@ export class SqlitePersistence {
       )
       .get();
     if (hasVersion) {
-      const version = this.schemaVersion();
+      let version = this.schemaVersion();
       if (version === 1) {
         this.db.exec(`
           BEGIN;
@@ -362,7 +446,17 @@ export class SqlitePersistence {
           UPDATE schema_version SET version = 2;
           COMMIT;
         `);
-        return;
+        version = 2;
+      }
+      if (version === 2) {
+        this.db.exec(`
+          BEGIN;
+          CREATE TABLE project_integrity_policy (project_id TEXT PRIMARY KEY REFERENCES projects(id), required INTEGER NOT NULL DEFAULT 0 CHECK (required IN (0, 1)), anchor_hash TEXT);
+          INSERT INTO project_integrity_policy (project_id, required, anchor_hash) SELECT id, 0, NULL FROM projects;
+          UPDATE schema_version SET version = 3;
+          COMMIT;
+        `);
+        version = 3;
       }
       if (version !== SCHEMA_VERSION)
         throw new Error(
@@ -375,6 +469,7 @@ export class SqlitePersistence {
       CREATE TABLE schema_version (version INTEGER NOT NULL);
       INSERT INTO schema_version VALUES (${SCHEMA_VERSION});
       CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE project_integrity_policy (project_id TEXT PRIMARY KEY REFERENCES projects(id), required INTEGER NOT NULL DEFAULT 0 CHECK (required IN (0, 1)), anchor_hash TEXT);
       CREATE TABLE imports (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), created_at TEXT NOT NULL, observation_count INTEGER NOT NULL, skipped_entry_count INTEGER NOT NULL, source_label TEXT NOT NULL);
       CREATE TABLE observations (id TEXT NOT NULL, import_id TEXT NOT NULL REFERENCES imports(id), row_order INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, import_id));
       CREATE TABLE endpoints (id TEXT NOT NULL, import_id TEXT NOT NULL REFERENCES imports(id), row_order INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, import_id));

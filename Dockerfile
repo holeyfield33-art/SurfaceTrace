@@ -20,4 +20,13 @@ ENV npm_config_update_notifier=false \
     npm_config_fund=false \
     npm_config_audit=false
 
-CMD ["bash"]
+COPY package.json package-lock.json .npmrc ./
+COPY packages/core/package.json packages/core/package.json
+COPY packages/server/package.json packages/server/package.json
+COPY packages/web/package.json packages/web/package.json
+RUN npm ci \
+  && sha256sum package-lock.json | cut -d ' ' -f 1 > node_modules/.surfacetrace-lock-sha256
+
+COPY . .
+
+CMD ["bash", "scripts/container-start.sh"]

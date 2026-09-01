@@ -5,7 +5,7 @@ import {
   bodyShape,
   isSensitiveHeader,
   isSensitiveQueryParam,
-  redactBody,
+  redactHarBody,
   redactHeaders,
   sanitizeUrl,
 } from "./redact.js";
@@ -81,6 +81,7 @@ function extractInputs(
   entry: HarEntry,
   url: URL,
   template: string,
+  safeRequestBody: string | null,
 ): ExtractedInput[] {
   const inputs: ExtractedInput[] = [];
   for (const [name, value] of Object.entries(
@@ -122,9 +123,9 @@ function extractInputs(
   }
   const postData = entry.request.postData;
   const mime = postData?.mimeType.toLowerCase() ?? "";
-  if (postData && mime.includes("json") && postData.text) {
+  if (postData && mime.includes("json") && safeRequestBody) {
     try {
-      inputs.push(...jsonInputs(JSON.parse(postData.text) as unknown));
+      inputs.push(...jsonInputs(JSON.parse(safeRequestBody) as unknown));
     } catch {
       /* Keep only non-JSON shape metadata. */
     }
@@ -135,8 +136,8 @@ function extractInputs(
   ) {
     const params =
       postData.params ??
-      (mime.includes("x-www-form-urlencoded") && postData.text
-        ? [...new URLSearchParams(postData.text)].map(([name, value]) => ({
+      (mime.includes("x-www-form-urlencoded") && safeRequestBody
+        ? [...new URLSearchParams(safeRequestBody)].map(([name, value]) => ({
             name,
             value,
           }))
@@ -214,11 +215,7 @@ export function importHar(har: HarFile): ImportResult {
     }
     observation.endpointId = endpoint.id;
     observations.push(observation);
-    for (const input of extractInputs(
-      entry,
-      sourceUrl,
-      observation.pathTemplate,
-    ))
+    for (const input of observation.parsedInputs)
       addInput(inputMap, endpoint.id, input);
   }
   return {
@@ -253,7 +250,22 @@ function entryToObservation(
   const responseHeaders = redactHeaders(
     headersToRecord(entry.response.headers),
   );
-  const parsedInputs = extractInputs(entry, sourceUrl, pathTemplate);
+  const safeRequestBody = redactHarBody(
+    entry.request.postData?.text,
+    entry.request.postData?.mimeType,
+    entry.request.postData?.encoding,
+  );
+  const safeResponseBody = redactHarBody(
+    entry.response.content?.text,
+    entry.response.content?.mimeType,
+    entry.response.content?.encoding,
+  );
+  const parsedInputs = extractInputs(
+    entry,
+    sourceUrl,
+    pathTemplate,
+    safeRequestBody,
+  );
   const cookies = Object.fromEntries(
     (entry.request.cookies ?? []).map((cookie) => [cookie.name, REDACTED]),
   );
@@ -287,20 +299,14 @@ function entryToObservation(
       headers: safeRequestHeaders,
       cookies,
       query,
-      body: redactBody(
-        entry.request.postData?.text,
-        entry.request.postData?.mimeType,
-      ),
+      body: safeRequestBody,
     },
     response: {
       httpVersion: entry.response.httpVersion ?? "HTTP/1.1",
       status: entry.response.status,
       statusText: entry.response.statusText,
       headers: responseHeaders,
-      body: redactBody(
-        entry.response.content?.text,
-        entry.response.content?.mimeType,
-      ),
+      body: safeResponseBody,
     },
   };
   const payload = {
@@ -308,10 +314,10 @@ function entryToObservation(
     url: sanitizedUrl,
     pathTemplate,
     requestHeaders,
-    requestBodyShape: bodyShape(entry.request.postData?.text),
+    requestBodyShape: bodyShape(safeRequestBody),
     responseStatus: entry.response.status,
     responseHeaders,
-    responseBodyShape: bodyShape(entry.response.content?.text),
+    responseBodyShape: bodyShape(safeResponseBody),
     responseSize: entry.response.content?.size ?? 0,
     capturedAt: entry.startedDateTime,
     http,

@@ -31,6 +31,7 @@ import { validateRuntimeCredentialHeaders } from "./replay/credentialHeaders.js"
 import type {
   Asset,
   AssetCategory,
+  EvidenceRecord,
   Experiment,
   ExperimentMutation,
   ExperimentStatus,
@@ -50,6 +51,30 @@ import {
   type ImportRecord,
   type PersistedState,
 } from "./persistence.js";
+
+interface StateIntegrityPayload {
+  event: "investigation_state_anchored";
+  version: 1 | 2;
+  projectId: string;
+  stateHash: string;
+}
+
+function legacyInvestigationStateHash(snapshot: PersistedState): string {
+  return hashPayload({ ...snapshot, evidence: undefined });
+}
+
+function stateIntegrityPayload(
+  record: EvidenceRecord | undefined,
+): StateIntegrityPayload | null {
+  if (record?.kind !== "integrity" || !record.payload) return null;
+  const payload = record.payload as Partial<StateIntegrityPayload>;
+  return payload.event === "investigation_state_anchored" &&
+    (payload.version === 1 || payload.version === 2) &&
+    typeof payload.projectId === "string" &&
+    typeof payload.stateHash === "string"
+    ? (payload as StateIntegrityPayload)
+    : null;
+}
 
 const EXPERIMENT_STATUSES = new Set<ExperimentStatus>([
   "open",
@@ -108,6 +133,10 @@ const HTTP_METHODS = new Set<HttpMethod>([
   "HEAD",
   "OPTIONS",
 ]);
+const AUTOMATIC_STOP_CONDITIONS = new Set([
+  "repeatedServerErrors",
+  "authenticationLost",
+] as const);
 
 export interface AppOptions {
   maxBodyBytes?: number;
@@ -206,7 +235,13 @@ export function buildApp(options: AppOptions = {}) {
     persistence.createProject("Untitled Investigation");
   const restored = persistence.load(activeProject.id);
   let activeImport: ImportRecord | null = restored?.activeImport ?? null;
-  let ledger = new EvidenceLedger(restored?.evidence ?? []);
+  let ledger: EvidenceLedger;
+  try {
+    ledger = new EvidenceLedger(restored?.evidence ?? []);
+  } catch (error) {
+    persistence.close();
+    throw error;
+  }
   let projectScope: ProjectScope | null = restored?.scope ?? null;
   const requestBudget = new RequestBudget();
   if (projectScope)
@@ -214,10 +249,14 @@ export function buildApp(options: AppOptions = {}) {
       projectScope.id,
       projectScope.rateWindowTimestamps ?? [],
     );
-  const runtimeCredentials = new Map<string, RuntimeCredential>();
+  const runtimeCredentials = new Map<
+    string,
+    Map<string, RuntimeCredential>
+  >();
   const preparedReplays = new Map<
     string,
     {
+      projectId: string;
       baseline: Observation;
       request: ReconstructedRequest;
       mutation: ExperimentMutation;
@@ -228,6 +267,8 @@ export function buildApp(options: AppOptions = {}) {
   >();
   const forcePersistRequests = new WeakSet<object>();
   const changedImportRequests = new WeakSet<object>();
+  const activeReplayRequests = new WeakSet<object>();
+  let activeReplayRequestCount = 0;
   let experiments: Experiment[] = restored?.experiments ?? [];
   let assets: Asset[] = restored?.assets ?? [];
   let trustBoundaries: TrustBoundary[] = restored?.trustBoundaries ?? [];
@@ -268,7 +309,69 @@ export function buildApp(options: AppOptions = {}) {
     };
   }
 
+  function publicEvidence(): readonly EvidenceRecord[] {
+    return ledger.all().filter((record) => record.kind !== "integrity");
+  }
+
+  function assertStateIntegrity(snapshot: PersistedState): 0 | 1 | 2 {
+    const policy = persistence.integrityPolicy(snapshot.project.id);
+    if (!policy.required) return 0;
+    const finalRecord = snapshot.evidence.at(-1);
+    const payload = stateIntegrityPayload(finalRecord);
+    const expectedStateHash = payload
+      ? payload.version === 1
+        ? legacyInvestigationStateHash(snapshot)
+        : persistence.investigationHash(snapshot)
+      : null;
+    if (
+      !payload ||
+      !policy.anchorHash ||
+      finalRecord?.contentHash !== policy.anchorHash ||
+      payload.projectId !== snapshot.project.id ||
+      payload.stateHash !== expectedStateHash
+    )
+      throw new Error(
+        `Persisted investigation integrity verification failed for project ${snapshot.project.id}`,
+      );
+    return payload.version;
+  }
+
+  function appendStateIntegrityAnchor(): string {
+    const record = ledger.append("integrity", {
+      event: "investigation_state_anchored",
+      version: 2,
+      projectId: activeProject.id,
+      stateHash: persistence.investigationHash(state()),
+    } satisfies StateIntegrityPayload);
+    return record.contentHash;
+  }
+
+  function currentStateIntegrityValid(): boolean {
+    try {
+      return ledger.verify() && assertStateIntegrity(state()) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  function validatePersistedState(snapshot: PersistedState): EvidenceLedger {
+    const candidateLedger = new EvidenceLedger(snapshot.evidence);
+    assertStateIntegrity(snapshot);
+    return candidateLedger;
+  }
+
+  function releaseActiveReplay(request: object): void {
+    if (!activeReplayRequests.delete(request)) return;
+    activeReplayRequestCount = Math.max(0, activeReplayRequestCount - 1);
+  }
+
   function restoreState(snapshot: PersistedState): void {
+    const restoredLedger = validatePersistedState(snapshot);
+    const projectChanged = activeProject.id !== snapshot.project.id;
+    if (projectChanged) {
+      runtimeCredentials.clear();
+      preparedReplays.clear();
+    }
     activeProject = snapshot.project;
     activeImport = snapshot.activeImport;
     lastImport = snapshot.activeImport
@@ -286,8 +389,9 @@ export function buildApp(options: AppOptions = {}) {
     trustBoundaries = snapshot.trustBoundaries;
     lastHypotheses = snapshot.hypotheses.length ? snapshot.hypotheses : null;
     experiments = snapshot.experiments;
-    ledger = new EvidenceLedger(snapshot.evidence);
+    ledger = restoredLedger;
     projectScope = snapshot.scope;
+    requestBudget.clear();
     if (projectScope)
       requestBudget.restore(
         projectScope.id,
@@ -297,17 +401,56 @@ export function buildApp(options: AppOptions = {}) {
   }
 
   function refreshGraph(): void {
-    if (!lastImport || !lastHypotheses) return;
-    lastGraph = buildGraph({
-      ...lastImport,
-      identities,
-      assets,
-      trustBoundaries,
-      hypotheses: lastHypotheses,
-      experiments,
-    });
+    lastGraph =
+      lastImport && lastHypotheses
+        ? buildGraph({
+            ...lastImport,
+            identities,
+            assets,
+            trustBoundaries,
+            hypotheses: lastHypotheses,
+            experiments,
+          })
+        : null;
+  }
+
+  function applyAutomaticReplayStops(responseStatus: number): void {
+    if (!projectScope) return;
+    const stops = projectScope.stopConditions;
+    if (responseStatus >= 500) {
+      stops.serverErrorCount = (stops.serverErrorCount ?? 0) + 1;
+      if (stops.serverErrorCount >= 3 && !stops.repeatedServerErrors) {
+        stops.repeatedServerErrors = true;
+        ledger.append("scope", {
+          event: "scope_stop_activated",
+          condition: "repeatedServerErrors",
+          responseStatus,
+          consecutiveServerErrors: stops.serverErrorCount,
+        });
+      }
+    } else if (!stops.repeatedServerErrors) {
+      stops.serverErrorCount = 0;
+    }
+    if (responseStatus === 401 && !stops.authenticationLost) {
+      stops.authenticationLost = true;
+      ledger.append("scope", {
+        event: "scope_stop_activated",
+        condition: "authenticationLost",
+        responseStatus,
+      });
+    }
   }
   refreshGraph();
+
+  try {
+    if (assertStateIntegrity(state()) < 2) {
+      const anchorHash = appendStateIntegrityAnchor();
+      persistence.save(state(), false, false, anchorHash);
+    }
+  } catch (error) {
+    persistence.close();
+    throw error;
+  }
 
   app.addHook("onRequest", async (request, reply) => {
     if (request.url.split("?", 1)[0] === "/health") return;
@@ -318,7 +461,7 @@ export function buildApp(options: AppOptions = {}) {
     }
     if (!apiToken && !isLoopbackAddress(request.ip))
       return reply.status(401).send({ error: "Remote API access is disabled" });
-    if (["POST", "PATCH", "DELETE"].includes(request.method))
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method))
       requestSnapshots.set(request, structuredClone(state()));
   });
   app.addHook("onSend", async (request, reply, payload) => {
@@ -329,10 +472,12 @@ export function buildApp(options: AppOptions = {}) {
     ) {
       try {
         activeProject.updatedAt = new Date().toISOString();
+        const anchorHash = appendStateIntegrityAnchor();
         persistence.save(
           state(),
           newImportRequests.has(request),
           changedImportRequests.has(request),
+          anchorHash,
         );
       } catch (error) {
         restoreState(snapshot);
@@ -342,6 +487,8 @@ export function buildApp(options: AppOptions = {}) {
     requestSnapshots.delete(request);
     return payload;
   });
+  app.addHook("onError", async (request) => releaseActiveReplay(request));
+  app.addHook("onResponse", async (request) => releaseActiveReplay(request));
   app.addHook("onClose", async () => persistence.close());
 
   void app.register(cors, {
@@ -368,15 +515,25 @@ export function buildApp(options: AppOptions = {}) {
     });
   });
 
+  app.get("/", async () => ({
+    ok: true,
+    service: "surfacetrace-server",
+    health: "/health",
+  }));
   app.get("/health", async () => ({
     ok: true,
     service: "surfacetrace-server",
     version: "0.1.0",
   }));
-  app.get("/projects", async () => ({
-    projects: persistence.listProjects(),
-    activeProjectId: activeProject.id,
-  }));
+  app.get("/projects", async () => {
+    const projects = persistence.listProjects();
+    for (const project of projects) {
+      const loaded = persistence.load(project.id);
+      if (loaded && persistence.integrityPolicy(project.id).required)
+        validatePersistedState(loaded);
+    }
+    return { projects, activeProjectId: activeProject.id };
+  });
   app.post<{ Body: { name?: string } }>("/projects", async (request, reply) => {
     const project = persistence.createProject(
       request.body?.name?.trim() || "Untitled Investigation",
@@ -386,6 +543,10 @@ export function buildApp(options: AppOptions = {}) {
   app.post<{ Params: { projectId: string } }>(
     "/projects/:projectId/open",
     async (request, reply) => {
+      if (activeReplayRequestCount > 0)
+        return reply.status(409).send({
+          error: "Project switching is disabled while a replay is in flight",
+        });
       const loaded = persistence.load(request.params.projectId);
       if (!loaded)
         return reply.status(404).send({ error: "Project not found" });
@@ -399,8 +560,11 @@ export function buildApp(options: AppOptions = {}) {
   app.get<{ Params: { projectId: string } }>(
     "/projects/:projectId/imports",
     async (request, reply) => {
-      if (!persistence.load(request.params.projectId))
+      const loaded = persistence.load(request.params.projectId);
+      if (!loaded)
         return reply.status(404).send({ error: "Project not found" });
+      if (persistence.integrityPolicy(request.params.projectId).required)
+        validatePersistedState(loaded);
       return { imports: persistence.listImports(request.params.projectId) };
     },
   );
@@ -502,9 +666,10 @@ export function buildApp(options: AppOptions = {}) {
       lastHypotheses ?? reply.status(404).send({ error: "No hypotheses yet" }),
   );
   app.get("/evidence", async () => ({
-    records: ledger.all(),
-    valid: ledger.verify(),
+    records: publicEvidence(),
+    valid: currentStateIntegrityValid(),
     tip: ledger.tipHash(),
+    stateAnchored: persistence.integrityPolicy(activeProject.id).required,
   }));
   app.get("/scope", async () => ({
     scope: projectScope,
@@ -572,8 +737,11 @@ export function buildApp(options: AppOptions = {}) {
             : Number(body.stopConditions.maxRequestCount),
         requestCount: previous?.stopConditions.requestCount ?? 0,
         repeatedServerErrors:
-          body.stopConditions?.repeatedServerErrors === true,
-        authenticationLost: body.stopConditions?.authenticationLost === true,
+          previous?.stopConditions.repeatedServerErrors ?? false,
+        serverErrorCount:
+          previous?.stopConditions.serverErrorCount ?? 0,
+        authenticationLost:
+          previous?.stopConditions.authenticationLost ?? false,
         customNote: redactBody(body.stopConditions?.customNote, "text/plain"),
       },
       notes: redactBody(body.notes, "text/plain"),
@@ -653,6 +821,37 @@ export function buildApp(options: AppOptions = {}) {
       requestCount: projectScope.stopConditions.requestCount,
     };
   });
+  app.post<{
+    Body: { condition?: "repeatedServerErrors" | "authenticationLost" };
+  }>("/scope/stops/reset", async (request, reply) => {
+    if (!projectScope)
+      return reply.status(409).send({ error: "No project scope configured" });
+    const condition = request.body?.condition;
+    if (!condition || !AUTOMATIC_STOP_CONDITIONS.has(condition))
+      return reply.status(400).send({
+        error:
+          "condition must be repeatedServerErrors or authenticationLost",
+      });
+    const wasActive = projectScope.stopConditions[condition];
+    projectScope.stopConditions[condition] = false;
+    if (condition === "repeatedServerErrors")
+      projectScope.stopConditions.serverErrorCount = 0;
+    projectScope.updatedAt = new Date().toISOString();
+    const evidence = ledger.append("scope", {
+      event: "scope_stop_reset",
+      condition,
+      wasActive,
+      projectId: activeProject.id,
+      scopeId: projectScope.id,
+    });
+    return {
+      reset: true,
+      condition,
+      wasActive,
+      scope: projectScope,
+      evidenceId: evidence.id,
+    };
+  });
   app.put<{
     Params: { identityId: string };
     Body: RuntimeCredential;
@@ -679,7 +878,12 @@ export function buildApp(options: AppOptions = {}) {
         error: error instanceof Error ? error.message : "Credential header rejected",
       });
     }
-    runtimeCredentials.set(identity.id, {
+    let projectCredentials = runtimeCredentials.get(activeProject.id);
+    if (!projectCredentials) {
+      projectCredentials = new Map<string, RuntimeCredential>();
+      runtimeCredentials.set(activeProject.id, projectCredentials);
+    }
+    projectCredentials.set(identity.id, {
       headers: validatedHeaders,
       cookies: structuredClone(cookies),
       approvedApiKeyHeaderNames: [
@@ -728,7 +932,7 @@ export function buildApp(options: AppOptions = {}) {
         baseline,
         request.body.mutation,
         identities,
-        runtimeCredentials,
+        runtimeCredentials.get(activeProject.id) ?? new Map(),
         request.body.targetIdentityId,
       );
     } catch (error) {
@@ -775,6 +979,7 @@ export function buildApp(options: AppOptions = {}) {
       };
     const token = crypto.randomUUID();
     preparedReplays.set(token, {
+      projectId: activeProject.id,
       baseline,
       request: reconstructed,
       mutation: structuredClone(request.body.mutation),
@@ -796,8 +1001,10 @@ export function buildApp(options: AppOptions = {}) {
   app.post<{ Params: { token: string } }>(
     "/replay/:token/cancel",
     async (request, reply) => {
-      if (!preparedReplays.delete(request.params.token))
+      const prepared = preparedReplays.get(request.params.token);
+      if (!prepared || prepared.projectId !== activeProject.id)
         return reply.status(404).send({ error: "Replay preview not found" });
+      preparedReplays.delete(request.params.token);
       return { cancelled: true, networkRequests: 0 };
     },
   );
@@ -811,7 +1018,7 @@ export function buildApp(options: AppOptions = {}) {
         networkRequests: 0,
       });
     const prepared = preparedReplays.get(request.params.token);
-    if (!prepared)
+    if (!prepared || prepared.projectId !== activeProject.id)
       return reply.status(404).send({
         error: "Replay preview not found or already used",
         networkRequests: 0,
@@ -863,6 +1070,8 @@ export function buildApp(options: AppOptions = {}) {
       url: sanitizeUrl(prepared.request.url),
       approvedAt,
     });
+    activeReplayRequests.add(request);
+    activeReplayRequestCount += 1;
     let replayResponse;
     try {
       replayResponse = await executeReplayRequest(prepared.request, {
@@ -1015,11 +1224,7 @@ export function buildApp(options: AppOptions = {}) {
       },
     };
     experiments.push(experiment);
-    if (replayResponse.status >= 500 && projectScope) {
-      const count = (projectScope.stopConditions.serverErrorCount ?? 0) + 1;
-      projectScope.stopConditions.serverErrorCount = count;
-      if (count >= 3) projectScope.stopConditions.repeatedServerErrors = true;
-    }
+    applyAutomaticReplayStops(replayResponse.status);
     refreshGraph();
     return {
       experiment,
@@ -1054,7 +1259,7 @@ export function buildApp(options: AppOptions = {}) {
       hypotheses: lastHypotheses,
       experiments,
       graph: lastGraph,
-      evidence: ledger.all(),
+      evidence: publicEvidence(),
       coverage: buildEvidenceCoverage({
         observations: lastImport.observations,
         inputs: lastImport.inputs,

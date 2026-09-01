@@ -11,6 +11,17 @@ if (HOST !== "127.0.0.1" && unsafeHost !== "allow-nonloopback") {
 }
 
 const routes = {
+  "/": json(200, {
+    ok: true,
+    service: "surfacetrace-controlled-replay-lab",
+    routes: [
+      "/lab/projects/100",
+      "/lab/projects/200",
+      "/lab/redirect",
+      "/lab/slow",
+      "/lab/large",
+    ],
+  }),
   "/lab/projects/100": json(200, { id: 100, name: "Alpha", owner: "Account A" }),
   "/lab/projects/200": json(200, {
     id: 200,

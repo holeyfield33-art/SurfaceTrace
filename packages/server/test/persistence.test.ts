@@ -51,7 +51,7 @@ describe("SQLite persistence adapter", () => {
       );
       database.close();
       expect(() => new SqlitePersistence(dbPath)).toThrow(
-        "Unsupported SurfaceTrace database schema version 99; expected 2",
+        "Unsupported SurfaceTrace database schema version 99; expected 3",
       );
       const reopened = new Database(dbPath, { readonly: true });
       expect(
@@ -80,10 +80,14 @@ describe("SQLite persistence adapter", () => {
       `);
       database.close();
       const persistence = new SqlitePersistence(dbPath);
-      expect(persistence.schemaVersion()).toBe(2);
+      expect(persistence.schemaVersion()).toBe(3);
       expect(persistence.listProjects()).toEqual([
         expect.objectContaining({ id: "project-v1", name: "Existing project" }),
       ]);
+      expect(persistence.integrityPolicy("project-v1")).toEqual({
+        required: false,
+        anchorHash: null,
+      });
       persistence.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });

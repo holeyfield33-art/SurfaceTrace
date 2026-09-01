@@ -235,6 +235,7 @@ interface ProjectScope {
     maxRequestCount: number | null;
     requestCount?: number;
     repeatedServerErrors: boolean;
+    serverErrorCount?: number;
     authenticationLost: boolean;
     customNote: string | null;
   };
@@ -673,8 +674,10 @@ function ScopePanel({
         stopConditions: {
           manualStop,
           maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
-          repeatedServerErrors: false,
-          authenticationLost: false,
+          repeatedServerErrors:
+            scope?.stopConditions.repeatedServerErrors ?? false,
+          authenticationLost:
+            scope?.stopConditions.authenticationLost ?? false,
           customNote: null,
         },
         notes: scope?.notes ?? null,
@@ -690,6 +693,29 @@ function ScopePanel({
     }
     onScope(result.scope);
     setMessage("Scope saved. No request was sent.");
+  }
+  async function resetStop(
+    condition: "repeatedServerErrors" | "authenticationLost",
+  ): Promise<void> {
+    const response = await fetch("/api/scope/stops/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ condition }),
+    });
+    const result = (await response.json()) as {
+      scope?: ProjectScope;
+      error?: string;
+    };
+    if (!response.ok || !result.scope) {
+      setMessage(result.error ?? "Automatic stop could not be reset");
+      return;
+    }
+    onScope(result.scope);
+    setMessage(
+      condition === "repeatedServerErrors"
+        ? "Server-error stop reset. Recheck target health before replay."
+        : "Authentication-loss stop reset. Recheck credentials before replay.",
+    );
   }
   async function preview(): Promise<void> {
     const response = await fetch("/api/scope/preview", {
@@ -795,6 +821,39 @@ function ScopePanel({
           Manual stop
         </label>
       </div>
+      {(scope?.stopConditions.repeatedServerErrors ||
+        scope?.stopConditions.authenticationLost) && (
+        <div className="scope-stop-alert" role="alert">
+          <strong>AUTOMATIC EXECUTION STOP ACTIVE</strong>
+          {scope.stopConditions.repeatedServerErrors && (
+            <div>
+              <span>
+                Repeated server errors
+                {scope.stopConditions.serverErrorCount
+                  ? ` (${scope.stopConditions.serverErrorCount} consecutive)`
+                  : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => void resetStop("repeatedServerErrors")}
+              >
+                RESET SERVER-ERROR STOP
+              </button>
+            </div>
+          )}
+          {scope.stopConditions.authenticationLost && (
+            <div>
+              <span>Authentication loss detected</span>
+              <button
+                type="button"
+                onClick={() => void resetStop("authenticationLost")}
+              >
+                RESET AUTHENTICATION STOP
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <button className="action" onClick={() => void save()}>
         SAVE SCOPE
       </button>
