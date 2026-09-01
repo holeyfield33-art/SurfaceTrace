@@ -28,7 +28,10 @@ import {
   type RuntimeCredential,
 } from "./replay/reconstruct.js";
 import { executeReplayRequest } from "./replay/httpClient.js";
-import { validateRuntimeCredentialHeaders } from "./replay/credentialHeaders.js";
+import {
+  validateRuntimeCredentialCookies,
+  validateRuntimeCredentialHeaders,
+} from "./replay/credentialHeaders.js";
 import type {
   Asset,
   AssetCategory,
@@ -56,6 +59,7 @@ import {
   reconcileImportScopedState,
   type ImportReplacementSummary,
 } from "./importLifecycle.js";
+import { requestSchemas } from "./requestSchemas.js";
 
 interface StateIntegrityPayload {
   event: "investigation_state_anchored";
@@ -142,6 +146,10 @@ const AUTOMATIC_STOP_CONDITIONS = new Set([
   "repeatedServerErrors",
   "authenticationLost",
 ] as const);
+const INVALID_REQUEST = {
+  error: "Request validation failed",
+  code: "INVALID_REQUEST",
+} as const;
 
 export interface AppOptions {
   maxBodyBytes?: number;
@@ -225,6 +233,13 @@ export function buildApp(options: AppOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: maxBodyBytes,
+    ajv: {
+      customOptions: {
+        coerceTypes: false,
+        removeAdditional: false,
+        useDefaults: false,
+      },
+    },
   });
   const apiToken = options.apiToken ?? process.env.SURFACETRACE_API_TOKEN;
   if (apiToken && apiToken.length < 32)
@@ -469,6 +484,17 @@ export function buildApp(options: AppOptions = {}) {
     if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method))
       requestSnapshots.set(request, structuredClone(state()));
   });
+  app.addHook("preValidation", async (request, reply) => {
+    const schema = request.routeOptions.schema as
+      | { body?: unknown; querystring?: unknown }
+      | undefined;
+    const query = request.query as Record<string, unknown>;
+    if (
+      (request.body !== undefined && schema?.body === undefined) ||
+      (Object.keys(query).length > 0 && schema?.querystring === undefined)
+    )
+      return reply.status(400).send(INVALID_REQUEST);
+  });
   app.addHook("onSend", async (request, reply, payload) => {
     const snapshot = requestSnapshots.get(request);
     if (
@@ -506,12 +532,15 @@ export function buildApp(options: AppOptions = {}) {
       code?: string;
       statusCode?: number;
       message?: string;
+      validation?: unknown;
     };
     if (fastifyError.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
       return reply
         .status(413)
         .send({ error: `HAR upload exceeds ${maxBodyBytes} bytes` });
     }
+    if (fastifyError.validation)
+      return reply.status(400).send(INVALID_REQUEST);
     app.log.error(error);
     return reply.status(fastifyError.statusCode ?? 500).send({
       error: fastifyError.statusCode
@@ -539,14 +568,19 @@ export function buildApp(options: AppOptions = {}) {
     }
     return { projects, activeProjectId: activeProject.id };
   });
-  app.post<{ Body: { name?: string } }>("/projects", async (request, reply) => {
-    const project = persistence.createProject(
-      request.body?.name?.trim() || "Untitled Investigation",
-    );
-    return reply.status(201).send(project);
-  });
+  app.post<{ Body: { name?: string } }>(
+    "/projects",
+    { schema: requestSchemas.createProject },
+    async (request, reply) => {
+      const project = persistence.createProject(
+        request.body?.name?.trim() || "Untitled Investigation",
+      );
+      return reply.status(201).send(project);
+    },
+  );
   app.post<{ Params: { projectId: string } }>(
     "/projects/:projectId/open",
+    { schema: requestSchemas.projectParams },
     async (request, reply) => {
       if (activeReplayRequestCount > 0)
         return reply.status(409).send({
@@ -564,6 +598,7 @@ export function buildApp(options: AppOptions = {}) {
   );
   app.get<{ Params: { projectId: string } }>(
     "/projects/:projectId/imports",
+    { schema: requestSchemas.projectParams },
     async (request, reply) => {
       const loaded = persistence.load(request.params.projectId);
       if (!loaded)
@@ -575,6 +610,7 @@ export function buildApp(options: AppOptions = {}) {
   );
   app.post<{ Body: { har: string; sourceLabel?: string } }>(
     "/import/har",
+    { schema: requestSchemas.importHar },
     async (request, reply) => {
       if (activeReplayRequestCount > 0)
         return reply.status(409).send({
@@ -716,8 +752,8 @@ export function buildApp(options: AppOptions = {}) {
     scope: projectScope,
     status: projectScope?.active ? "ACTIVE_SCOPE" : "NO_ACTIVE_SCOPE",
   }));
-  app.put<{ Body: Partial<ProjectScope> }>("/scope", async (request, reply) => {
-    const body = request.body ?? {};
+  app.put<{ Body: Partial<ProjectScope> }>("/scope", { schema: requestSchemas.updateScope }, async (request, reply) => {
+    const body = request.body;
     const protocols = unique(body.allowedProtocols).map((item) =>
       item.toLowerCase(),
     );
@@ -810,6 +846,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.post<{ Body: { method: string; url: string; body?: unknown } }>(
     "/scope/preview",
+    { schema: requestSchemas.scopePreview },
     async (request) => ({
       decision: isRequestInScope(
         {
@@ -829,6 +866,7 @@ export function buildApp(options: AppOptions = {}) {
   );
   app.post<{ Body: { method: string; redirectUrl: string } }>(
     "/scope/redirect-preview",
+    { schema: requestSchemas.redirectPreview },
     async (request) => ({
       decision: evaluateRedirectTarget(
         request.body?.method ?? "",
@@ -864,7 +902,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.post<{
     Body: { condition?: "repeatedServerErrors" | "authenticationLost" };
-  }>("/scope/stops/reset", async (request, reply) => {
+  }>("/scope/stops/reset", { schema: requestSchemas.resetScopeStop }, async (request, reply) => {
     if (!projectScope)
       return reply.status(409).send({ error: "No project scope configured" });
     const condition = request.body?.condition;
@@ -896,7 +934,7 @@ export function buildApp(options: AppOptions = {}) {
   app.put<{
     Params: { identityId: string };
     Body: RuntimeCredential;
-  }>("/replay/credentials/:identityId", async (request, reply) => {
+  }>("/replay/credentials/:identityId", { schema: requestSchemas.runtimeCredential }, async (request, reply) => {
     const identity = identities.find(
       (item) => item.id === request.params.identityId,
     );
@@ -909,11 +947,13 @@ export function buildApp(options: AppOptions = {}) {
         .status(400)
         .send({ error: "Explicit runtime credential material is required" });
     let validatedHeaders: Record<string, string>;
+    let validatedCookies: Record<string, string>;
     try {
       validatedHeaders = validateRuntimeCredentialHeaders(
         headers,
         request.body.approvedApiKeyHeaderNames,
       );
+      validatedCookies = validateRuntimeCredentialCookies(cookies);
     } catch (error) {
       return reply.status(400).send({
         error: error instanceof Error ? error.message : "Credential header rejected",
@@ -926,7 +966,7 @@ export function buildApp(options: AppOptions = {}) {
     }
     projectCredentials.set(identity.id, {
       headers: validatedHeaders,
-      cookies: structuredClone(cookies),
+      cookies: validatedCookies,
       approvedApiKeyHeaderNames: [
         ...(request.body.approvedApiKeyHeaderNames ?? []),
       ],
@@ -946,7 +986,7 @@ export function buildApp(options: AppOptions = {}) {
       mutation: ExperimentMutation;
       targetIdentityId?: string | null;
     };
-  }>("/replay/prepare", async (request, reply) => {
+  }>("/replay/prepare", { schema: requestSchemas.replayPrepare }, async (request, reply) => {
     if (!lastImport)
       return reply.status(409).send({ error: "Import a HAR before replay" });
     const baseline = lastImport.observations.find(
@@ -1041,6 +1081,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.post<{ Params: { token: string } }>(
     "/replay/:token/cancel",
+    { schema: requestSchemas.replayTokenParams },
     async (request, reply) => {
       const prepared = preparedReplays.get(request.params.token);
       if (!prepared || prepared.projectId !== activeProject.id)
@@ -1052,7 +1093,7 @@ export function buildApp(options: AppOptions = {}) {
   app.post<{
     Params: { token: string };
     Body: { approval?: boolean };
-  }>("/replay/:token/send", async (request, reply) => {
+  }>("/replay/:token/send", { schema: requestSchemas.replaySend }, async (request, reply) => {
     if (request.body?.approval !== true)
       return reply.status(400).send({
         error: "Explicit approval is required",
@@ -1312,7 +1353,7 @@ export function buildApp(options: AppOptions = {}) {
   app.patch<{
     Params: { observationId: string };
     Body: { identityId: string };
-  }>("/observations/:observationId/identity", async (request, reply) => {
+  }>("/observations/:observationId/identity", { schema: requestSchemas.observationIdentity }, async (request, reply) => {
     if (!lastImport)
       return reply
         .status(409)
@@ -1345,7 +1386,7 @@ export function buildApp(options: AppOptions = {}) {
       linkedEndpointIds?: string[];
       linkedObservationIds?: string[];
     };
-  }>("/assets", async (request, reply) => {
+  }>("/assets", { schema: requestSchemas.createAsset }, async (request, reply) => {
     if (!lastImport)
       return reply
         .status(409)
@@ -1393,7 +1434,7 @@ export function buildApp(options: AppOptions = {}) {
         | "linkedObservationIds"
       >
     >;
-  }>("/assets/:assetId", async (request, reply) => {
+  }>("/assets/:assetId", { schema: requestSchemas.updateAsset }, async (request, reply) => {
     const asset = assets.find((item) => item.id === request.params.assetId);
     if (!asset || !lastImport)
       return reply.status(404).send({ error: "Asset not found" });
@@ -1418,6 +1459,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.delete<{ Params: { assetId: string } }>(
     "/assets/:assetId",
+    { schema: requestSchemas.assetParams },
     async (request, reply) => {
       const index = assets.findIndex(
         (item) => item.id === request.params.assetId,
@@ -1442,7 +1484,11 @@ export function buildApp(options: AppOptions = {}) {
       sourceRef: string;
       destinationRef: string;
     };
-  }>("/trust-boundaries", async (request, reply) => {
+  }>("/trust-boundaries", { schema: requestSchemas.createBoundary }, async (request, reply) => {
+    if (!lastImport)
+      return reply
+        .status(409)
+        .send({ error: "Import a HAR before adding trust boundaries" });
     const body = request.body;
     if (
       !body?.label?.trim() ||
@@ -1452,6 +1498,17 @@ export function buildApp(options: AppOptions = {}) {
     )
       return reply.status(400).send({
         error: "Valid boundary label, type, source, and destination required",
+      });
+    if (
+      !validBoundaryRefs(
+        body.sourceRef,
+        body.destinationRef,
+        identities,
+        lastImport.endpoints,
+      )
+    )
+      return reply.status(400).send({
+        error: "Boundary source and destination must reference active inventory",
       });
     const createdAt = new Date().toISOString();
     const boundary: TrustBoundary = {
@@ -1480,15 +1537,28 @@ export function buildApp(options: AppOptions = {}) {
         "label" | "type" | "notes" | "sourceRef" | "destinationRef"
       >
     >;
-  }>("/trust-boundaries/:boundaryId", async (request, reply) => {
+  }>("/trust-boundaries/:boundaryId", { schema: requestSchemas.updateBoundary }, async (request, reply) => {
     const boundary = trustBoundaries.find(
       (item) => item.id === request.params.boundaryId,
     );
     if (!boundary)
       return reply.status(404).send({ error: "Trust boundary not found" });
+    if (!lastImport)
+      return reply.status(409).send({ error: "No active import" });
     const body = request.body ?? {};
     if (body.type && !BOUNDARY_TYPES.has(body.type))
       return reply.status(400).send({ error: "Invalid trust boundary type" });
+    if (
+      !validBoundaryRefs(
+        body.sourceRef ?? boundary.sourceRef,
+        body.destinationRef ?? boundary.destinationRef,
+        identities,
+        lastImport.endpoints,
+      )
+    )
+      return reply.status(400).send({
+        error: "Boundary source and destination must reference active inventory",
+      });
     if (body.label !== undefined) boundary.label = body.label.trim();
     if (body.type !== undefined) boundary.type = body.type;
     if (body.notes !== undefined)
@@ -1502,6 +1572,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.delete<{ Params: { boundaryId: string } }>(
     "/trust-boundaries/:boundaryId",
+    { schema: requestSchemas.boundaryParams },
     async (request, reply) => {
       const index = trustBoundaries.findIndex(
         (item) => item.id === request.params.boundaryId,
@@ -1529,7 +1600,7 @@ export function buildApp(options: AppOptions = {}) {
       evidenceIds?: string[];
       notes?: string;
     };
-  }>("/hypotheses/:hypothesisId", async (request, reply) => {
+  }>("/hypotheses/:hypothesisId", { schema: requestSchemas.updateHypothesis }, async (request, reply) => {
     const hypothesis = lastHypotheses?.find(
       (item) => item.id === request.params.hypothesisId,
     );
@@ -1543,7 +1614,7 @@ export function buildApp(options: AppOptions = {}) {
       !validIds(body.experimentIds, experiments) ||
       !validIds(body.assetIds, assets) ||
       !validIds(body.trustBoundaryIds, trustBoundaries) ||
-      !validIds(body.evidenceIds, ledger.all())
+      !validIds(body.evidenceIds, publicEvidence())
     )
       return reply.status(400).send({ error: "Invalid hypothesis reference" });
     if (body.status !== undefined) hypothesis.status = body.status;
@@ -1572,7 +1643,7 @@ export function buildApp(options: AppOptions = {}) {
 
   app.get<{
     Querystring: { status?: string; endpointId?: string; identityId?: string };
-  }>("/experiments", async (request) => {
+  }>("/experiments", { schema: requestSchemas.experimentQuery }, async (request) => {
     const { status, endpointId, identityId } = request.query;
     return experiments.filter(
       (item) =>
@@ -1585,6 +1656,7 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.get<{ Params: { experimentId: string } }>(
     "/experiments/:experimentId",
+    { schema: requestSchemas.experimentParams },
     async (request, reply) => {
       return (
         experiments.find((item) => item.id === request.params.experimentId) ??
@@ -1600,7 +1672,7 @@ export function buildApp(options: AppOptions = {}) {
       structuredConclusion?: Partial<StructuredConclusion> | null;
       notes?: string;
     };
-  }>("/experiments/:experimentId", async (request, reply) => {
+  }>("/experiments/:experimentId", { schema: requestSchemas.updateExperiment }, async (request, reply) => {
     const experiment = experiments.find(
       (item) => item.id === request.params.experimentId,
     );
@@ -1756,7 +1828,7 @@ export function buildApp(options: AppOptions = {}) {
       mutation: ExperimentMutation;
       notes?: string;
     };
-  }>("/experiments", async (request, reply) => {
+  }>("/experiments", { schema: requestSchemas.createExperiment }, async (request, reply) => {
     if (!lastImport || !lastHypotheses)
       return reply
         .status(409)
@@ -1910,6 +1982,18 @@ function mutationMatchesInput(
       mutation.bodyField?.path === input.name
     );
   return kind === "identity";
+}
+
+function validBoundaryRefs(
+  sourceRef: string,
+  destinationRef: string,
+  identities: Array<{ id: string }>,
+  endpoints: Array<{ id: string }>,
+): boolean {
+  return (
+    (sourceRef === "browser" || identities.some((item) => item.id === sourceRef)) &&
+    endpoints.some((item) => item.id === destinationRef)
+  );
 }
 
 function redactMutation(mutation: ExperimentMutation): ExperimentMutation {
