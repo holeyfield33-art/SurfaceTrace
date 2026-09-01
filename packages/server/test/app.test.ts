@@ -484,6 +484,261 @@ describe("local API trust boundary", () => {
     }
   });
 
+  test("reconciles import-scoped state when a newer HAR replaces the active import", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-reimport-"));
+    const dbPath = join(directory, "reimport.db");
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    try {
+      first = buildApp({ logger: false, dbPath });
+      expect(
+        (
+          await first.inject({
+            method: "POST",
+            url: "/import/har",
+            payload: { har: sample, sourceLabel: "first.har" },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const before = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      const endpoint = before.endpoints.find(
+        (item: { pathTemplate: string }) =>
+          item.pathTemplate === "/api/projects/{id}",
+      );
+      const observations = before.observations.filter(
+        (item: { endpointId: string }) => item.endpointId === endpoint.id,
+      );
+      const hypothesis = before.hypotheses.find(
+        (item: { endpointId: string }) => item.endpointId === endpoint.id,
+      );
+      const input = before.inputs.find(
+        (item: { endpointId: string; location: string }) =>
+          item.endpointId === endpoint.id && item.location === "path",
+      );
+      await first.inject({
+        method: "PATCH",
+        url: `/observations/${observations[0].id}/identity`,
+        payload: { identityId: "account-a" },
+      });
+      const asset = (
+        await first.inject({
+          method: "POST",
+          url: "/assets",
+          payload: {
+            label: "Customer record",
+            category: "pii",
+            linkedEndpointIds: [endpoint.id],
+            linkedObservationIds: [observations[0].id],
+          },
+        })
+      ).json();
+      const boundary = (
+        await first.inject({
+          method: "POST",
+          url: "/trust-boundaries",
+          payload: {
+            label: "Account to API",
+            type: "browser_api",
+            sourceRef: "account-a",
+            destinationRef: endpoint.id,
+          },
+        })
+      ).json();
+      const experiment = await first.inject({
+        method: "POST",
+        url: "/experiments",
+        payload: {
+          endpointId: endpoint.id,
+          hypothesisId: hypothesis.id,
+          inputId: input.id,
+          baselineObservationId: observations[0].id,
+          resultObservationId: observations[1].id,
+          mutation: { pathParam: { name: "id", from: "100", to: "200" } },
+        },
+      });
+      expect(experiment.statusCode).toBe(201);
+      const linkedEvidence = (
+        await first.inject({ method: "GET", url: "/evidence" })
+      ).json().records[0];
+      await first.inject({
+        method: "PATCH",
+        url: `/hypotheses/${hypothesis.id}`,
+        payload: {
+          status: "investigating",
+          observationIds: [observations[0].id],
+          experimentIds: [experiment.json().experiment.id],
+          assetIds: [asset.id],
+          trustBoundaryIds: [boundary.id],
+          evidenceIds: [linkedEvidence.id],
+          notes: "Retain this analyst context",
+        },
+      });
+      const evidenceCount = (
+        await first.inject({ method: "GET", url: "/evidence" })
+      ).json().records.length;
+
+      const overlappingImport = await first.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: { har: sample, sourceLabel: "refreshed.har" },
+      });
+      expect(overlappingImport.json().replacement).toMatchObject({
+        identityAssignmentsRemoved: 0,
+        assetEndpointLinksRemoved: 0,
+        assetObservationLinksRemoved: 0,
+        trustBoundariesRemoved: 0,
+        experimentsRemoved: 0,
+      });
+      const preserved = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      expect(
+        preserved.identities.find(
+          (item: { id: string }) => item.id === "account-a",
+        ).associatedObservationIds,
+      ).toEqual([observations[0].id]);
+      expect(preserved.assets[0]).toMatchObject({
+        id: asset.id,
+        linkedEndpointIds: [endpoint.id],
+        linkedObservationIds: [observations[0].id],
+      });
+      expect(preserved.trustBoundaries).toHaveLength(1);
+      expect(preserved.experiments).toHaveLength(1);
+      expect(
+        preserved.hypotheses.find(
+          (item: { id: string }) => item.id === hypothesis.id,
+        ),
+      ).toMatchObject({
+        status: "investigating",
+        observationIds: [observations[0].id],
+        experimentIds: [experiment.json().experiment.id],
+        assetIds: [asset.id],
+        trustBoundaryIds: [boundary.id],
+        evidenceIds: expect.arrayContaining([linkedEvidence.id]),
+        notes: "Retain this analyst context",
+      });
+
+      const replacement = await first.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: {
+          har: replacementHar(),
+          sourceLabel: "replacement.har",
+        },
+      });
+      expect(replacement.statusCode).toBe(200);
+      expect(replacement.json().replacement).toMatchObject({
+        previousImportId: expect.any(String),
+        identityAssignmentsRemoved: 1,
+        assetEndpointLinksRemoved: 1,
+        assetObservationLinksRemoved: 1,
+        trustBoundariesRemoved: 1,
+        experimentsRemoved: 1,
+        preparedReplaysInvalidated: 0,
+      });
+
+      const current = (
+        await first.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      expect(current.endpoints).toEqual([
+        expect.objectContaining({
+          host: "replacement.example",
+          pathTemplate: "/v2/accounts/{id}",
+        }),
+      ]);
+      expect(
+        current.identities.find(
+          (item: { id: string }) => item.id === "account-a",
+        ).associatedObservationIds,
+      ).toEqual([]);
+      expect(current.assets).toEqual([
+        expect.objectContaining({
+          id: asset.id,
+          linkedEndpointIds: [],
+          linkedObservationIds: [],
+        }),
+      ]);
+      expect(current.trustBoundaries).toEqual([]);
+      expect(current.experiments).toEqual([]);
+      const graphNodeIds = new Set(
+        current.graph.nodes.map((item: { id: string }) => item.id),
+      );
+      for (const edge of current.graph.edges as Array<{
+        source: string;
+        target: string;
+      }>) {
+        expect(graphNodeIds.has(edge.source)).toBe(true);
+        expect(graphNodeIds.has(edge.target)).toBe(true);
+      }
+      expect(
+        (await first.inject({ method: "GET", url: "/evidence" })).json()
+          .records.length,
+      ).toBeGreaterThan(evidenceCount);
+
+      await first.close();
+      first = null;
+      second = buildApp({ logger: false, dbPath });
+      const restoredInventory = (
+        await second.inject({ method: "GET", url: "/inventory" })
+      ).json();
+      expect(restoredInventory.endpoints).toEqual(current.endpoints);
+      expect(restoredInventory.identities).toEqual(current.identities);
+      expect(restoredInventory.assets).toEqual(current.assets);
+      expect(restoredInventory.trustBoundaries).toEqual([]);
+      expect(restoredInventory.experiments).toEqual([]);
+      const projects = (
+        await second.inject({ method: "GET", url: "/projects" })
+      ).json();
+      expect(
+        (
+          await second.inject({
+            method: "GET",
+            url: `/projects/${projects.activeProjectId}/imports`,
+          })
+        ).json().imports.map((item: { sourceLabel: string }) => item.sourceLabel),
+      ).toEqual(["replacement.har", "refreshed.har", "first.har"]);
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("restores an active import that generates zero hypotheses", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "surfacetrace-empty-hypotheses-"));
+    const dbPath = join(directory, "empty-hypotheses.db");
+    let first: ReturnType<typeof buildApp> | null = null;
+    let second: ReturnType<typeof buildApp> | null = null;
+    try {
+      first = buildApp({ logger: false, dbPath });
+      const imported = await first.inject({
+        method: "POST",
+        url: "/import/har",
+        payload: {
+          har: replacementHar("https://replacement.example/health"),
+        },
+      });
+      expect(imported.json()).toMatchObject({ hypotheses: 0 });
+      expect(
+        (await first.inject({ method: "GET", url: "/inventory" })).json()
+          .hypotheses,
+      ).toEqual([]);
+      await first.close();
+      first = null;
+
+      second = buildApp({ logger: false, dbPath });
+      const restored = await second.inject({ method: "GET", url: "/inventory" });
+      expect(restored.statusCode).toBe(200);
+      expect(restored.json().hypotheses).toEqual([]);
+    } finally {
+      if (first) await first.close();
+      if (second) await second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("refuses persisted investigation entity tampering", async () => {
     const directory = mkdtempSync(join(tmpdir(), "surfacetrace-integrity-"));
     const dbPath = join(directory, "integrity.db");
@@ -1414,3 +1669,37 @@ describe("local API trust boundary", () => {
     await app.close();
   });
 });
+
+function replacementHar(
+  url = "https://replacement.example/v2/accounts/900",
+): string {
+  return JSON.stringify({
+    log: {
+      version: "1.2",
+      creator: { name: "replacement-test", version: "1" },
+      entries: [
+        {
+          startedDateTime: "2026-08-31T00:00:00.000Z",
+          time: 12,
+          request: {
+            method: "GET",
+            url,
+            headers: [{ name: "Accept", value: "application/json" }],
+            queryString: [],
+            cookies: [],
+          },
+          response: {
+            status: 200,
+            statusText: "OK",
+            headers: [{ name: "Content-Type", value: "application/json" }],
+            content: {
+              size: 24,
+              mimeType: "application/json",
+              text: '{"id":900,"active":true}',
+            },
+          },
+        },
+      ],
+    },
+  });
+}
