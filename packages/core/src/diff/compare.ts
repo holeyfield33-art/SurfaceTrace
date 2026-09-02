@@ -324,14 +324,13 @@ function safeBodyText(observation: Observation): string | null {
 }
 
 function responseContentType(observation: Observation): string {
-  const headers = {
-    ...observation.responseHeaders,
-    ...(observation.http?.response.headers ?? {}),
-  };
-  const key = Object.keys(headers).find(
-    (name) => name.toLowerCase() === "content-type",
-  );
-  return key ? headers[key]! : "text/plain";
+  const primary = observation.http?.response.headers ?? {};
+  const secondary = observation.responseHeaders;
+  for (const [name, value] of Object.entries(primary))
+    if (name.toLowerCase() === "content-type") return value;
+  for (const [name, value] of Object.entries(secondary))
+    if (name.toLowerCase() === "content-type") return value;
+  return "text/plain";
 }
 
 function boundedValue(value: unknown): unknown {
