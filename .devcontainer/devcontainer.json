@@ -11,12 +11,12 @@
       "onAutoForward": "openBrowser"
     },
     "8787": {
-      "label": "SurfaceTrace API",
-      "onAutoForward": "notify"
+      "label": "SurfaceTrace API (internal - used via UI proxy)",
+      "onAutoForward": "silent"
     },
     "4040": {
-      "label": "Controlled Replay Lab",
-      "onAutoForward": "notify"
+      "label": "Controlled Replay Lab (internal - used via UI proxy)",
+      "onAutoForward": "silent"
     }
   },
   "customizations": {

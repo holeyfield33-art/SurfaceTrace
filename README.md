@@ -40,7 +40,11 @@ Open `http://localhost:5173`. The UI proxy exposes API health at `http://localho
 
 ### Codespaces and Dev Containers
 
-Opening the repository in its development container starts `npm run dev:all` automatically. Ports `5173`, `8787`, and `4040` are labeled and forwarded; port `5173` is the supported browser entry point and proxies `/api` and `/lab` to the loopback-only services inside the container. Vite admits only localhost, the exact Codespaces hostname, and explicitly configured hosts.
+Opening the repository in its development container starts `npm run dev:all` automatically. Ports `5173`, `8787`, and `4040` are labeled and forwarded; port `5173` is the supported browser entry point and proxies `/api` and `/lab` to the loopback-only services inside the container. Vite admits only localhost, Codespaces hostnames on the current forwarding domain, and explicitly configured hosts.
+
+Open only the **SurfaceTrace UI** (`5173`) port link. The API and Controlled Replay Lab port notifications are internal-only: they never serve a page, only a bare JSON health payload, so following either link is expected to look broken even when the container is healthy. Use them through the UI proxy instead, at `/api/health` and `/lab/`.
+
+If you change `.devcontainer/devcontainer.json`, `docker-compose.yml`, or `Dockerfile`, reconnecting to an existing codespace or container is not enough — run **Rebuild Container** (Codespaces or Dev Containers command palette). Docker Compose only evaluates `${CODESPACE_NAME}`-style environment substitution once, at container creation, so a container created before such a change won't pick it up until it's rebuilt.
 
 Keep every forwarded port **Private**. Codespaces ports are private by default, but repository configuration cannot override a user or organization visibility change. SurfaceTrace remains a single-user tool and is not safe for a public port or shared multi-user deployment.
 
@@ -64,7 +68,7 @@ npm install
 npm test
 ```
 
-On the current SurfaceTrace Windows workstation, the equivalent PowerShell selection is `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`. This fallback is machine-specific; other contributors should use their own Node manager or Node 22 installation. `npm install` ensures native dependencies match the selected runtime, and `npm test` confirms the repair. Do not rebuild dependencies under Node 24 and then return to Node 22; switching runtimes recreates the same native ABI mismatch.
+On a Windows workstation with a pinned Node 22 toolchain under `%USERPROFILE%\.toolchains\node-v22*` (not on PATH by default), the equivalent PowerShell selection is `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`, or run `npm run win:dev`, which detects that toolchain automatically and starts `dev:all` under it without touching your permanent PATH. This fallback is machine-specific; other contributors should use their own Node manager or Node 22 installation. `npm install` ensures native dependencies match the selected runtime, and `npm test` confirms the repair. Do not rebuild dependencies under Node 24 and then return to Node 22; switching runtimes recreates the same native ABI mismatch.
 
 SurfaceTrace is a single-user local tool, not a multi-tenant service. Local processes bind to loopback by default. Containers bind only Vite to the container interface required for forwarding, while API and lab processes remain on container loopback; Docker publishes only the web proxy on host loopback. If `SURFACETRACE_API_TOKEN` is configured, every protected API request requires it, including requests arriving over loopback; the Vite development proxy reads the token at runtime and adds it server-side without compiling it into browser JavaScript. Project, observation, identity, and evidence state all belong to one local operator workspace; public exposure and shared multi-user deployment are unsupported.
 

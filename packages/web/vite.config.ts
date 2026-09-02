@@ -8,9 +8,17 @@ export default defineConfig(({ mode }) => {
     throw new Error("SURFACETRACE_API_TOKEN must be at least 32 characters");
 
   const host = runtime.SURFACETRACE_WEB_HOST || "127.0.0.1";
+  const forwardingDomain =
+    runtime.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || "app.github.dev";
   const codespaceHost = runtime.CODESPACE_NAME
-    ? `${runtime.CODESPACE_NAME}-5173.${runtime.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || "app.github.dev"}`
+    ? `${runtime.CODESPACE_NAME}-5173.${forwardingDomain}`
     : null;
+  // docker-compose only bakes CODESPACE_NAME into the container at creation
+  // time, so an existing container that predates a rebuild would otherwise
+  // silently fall back to localhost-only and 403 the real forwarded host.
+  // A leading-dot domain match covers any codespace on this domain instead.
+  const codespaceDomainWildcard =
+    runtime.CODESPACE_NAME || runtime.CODESPACES ? `.${forwardingDomain}` : null;
   const configuredHosts = (runtime.SURFACETRACE_ALLOWED_HOSTS || "")
     .split(",")
     .map((value) => value.trim())
@@ -19,6 +27,7 @@ export default defineConfig(({ mode }) => {
     "localhost",
     "127.0.0.1",
     ...(codespaceHost ? [codespaceHost] : []),
+    ...(codespaceDomainWildcard ? [codespaceDomainWildcard] : []),
     ...configuredHosts,
   ];
 
