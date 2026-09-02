@@ -631,7 +631,14 @@ describe("observation comparison", () => {
     );
     expect(compareObservations("bad", malformed, withBody({}))).toMatchObject({
       bodyComparison: "non_json",
-      bodyChanges: [],
+      bodyChanges: [
+        {
+          path: "$",
+          changeType: "value_changed",
+          before: "not-json",
+          after: "{}",
+        },
+      ],
     });
   });
   test.each([
