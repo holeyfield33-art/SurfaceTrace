@@ -17,6 +17,7 @@
     "dev:web": "npm run dev --workspace=@surfacetrace/web",
     "predev:all": "npm run check:node && npm run build --workspace=@surfacetrace/core",
     "dev:all": "node scripts/dev-all.mjs",
+    "win:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/win-dev.ps1 dev:all",
     "lab": "node examples/controlled-replay-lab/lab.mjs",
     "lab:test": "node --test examples/controlled-replay-lab/test/lab.test.mjs",
     "pree2e": "npm run build",

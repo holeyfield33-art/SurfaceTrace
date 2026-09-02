@@ -11,6 +11,12 @@ const DEFAULT_LIMITS: DeepDiffLimits = {
   maxNodes: 10_000,
   maxDiffRecords: 1_000,
 };
+const HARD_LIMITS: DeepDiffLimits = {
+  maxDepth: 64,
+  maxNodes: 100_000,
+  maxDiffRecords: 10_000,
+};
+const MAX_RECORDED_VALUE_CHARS = 2_048;
 interface DiffState {
   changes: BodyChange[];
   nodes: number;
@@ -37,15 +43,29 @@ export function compareObservations(
   const afterBody = parseSafeJson(
     result.http?.response.body ?? result.responseBodyShape,
   );
+  const nonJsonChanged =
+    !beforeBody.ok || !afterBody.ok
+      ? compareNonJsonBodies(baseline, result)
+      : null;
   const state: DiffState = {
     changes: [],
     nodes: 0,
     truncated: false,
     reason: null,
-    limits: { ...DEFAULT_LIMITS, ...limits },
+    limits: normalizeLimits(limits),
   };
   if (beforeBody.ok && afterBody.ok)
     walk(beforeBody.value, afterBody.value, "", 0, state);
+  else if (nonJsonChanged?.changed)
+    record(state, {
+      path: "$",
+      changeType:
+        valueType(nonJsonChanged.before) === valueType(nonJsonChanged.after)
+          ? "value_changed"
+          : "type_changed",
+      before: nonJsonChanged.before,
+      after: nonJsonChanged.after,
+    });
   state.changes.sort(
     (a, b) =>
       a.path.localeCompare(b.path) || a.changeType.localeCompare(b.changeType),
@@ -69,6 +89,7 @@ export function compareObservations(
     truncated: state.truncated,
     reason: state.reason,
     bodyComparison,
+    nonJsonChanged: nonJsonChanged?.changed ?? null,
   });
   return {
     experimentId,
@@ -185,7 +206,11 @@ function record(state: DiffState, change: BodyChange): void {
   if (!state.truncated)
     state.changes.length >= state.limits.maxDiffRecords
       ? truncate(state, "max_diff_records")
-      : state.changes.push(change);
+      : state.changes.push({
+          ...change,
+          before: boundedValue(change.before),
+          after: boundedValue(change.after),
+        });
 }
 function truncate(
   state: DiffState,
@@ -205,19 +230,24 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function joinPath(parent: string, child: string): string {
-  return parent ? `${parent}.${child}` : child;
+  const plain = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(child);
+  if (!parent) return plain ? child : `[${JSON.stringify(child)}]`;
+  return plain ? `${parent}.${child}` : `${parent}[${JSON.stringify(child)}]`;
 }
 function compareHeaders(
   before: Record<string, string>,
   after: Record<string, string>,
 ): string[] {
   const changes: string[] = [];
+  const left = canonicalHeaders(before);
+  const right = canonicalHeaders(after);
   for (const name of [
-    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+    ...new Set([...left.keys(), ...right.keys()]),
   ].sort()) {
-    if (!(name in before)) changes.push(`+${name}`);
-    else if (!(name in after)) changes.push(`-${name}`);
-    else if (before[name] !== after[name]) changes.push(`~${name}`);
+    if (!left.has(name)) changes.push(`+${name}`);
+    else if (!right.has(name)) changes.push(`-${name}`);
+    else if (!arraysEqual(left.get(name)!, right.get(name)!))
+      changes.push(`~${name}`);
   }
   return changes;
 }
@@ -230,6 +260,7 @@ function summarize(
     truncated: boolean;
     reason: DiffCard["truncationReason"];
     bodyComparison: DiffCard["bodyComparison"];
+    nonJsonChanged: boolean | null;
   },
 ): string {
   const parts: string[] = [];
@@ -258,7 +289,72 @@ function summarize(
       `Size delta: ${meta.lengthDelta > 0 ? "+" : ""}${meta.lengthDelta}`,
     );
   if (meta.bodyComparison === "non_json")
-    parts.push("Body: non-JSON comparison unavailable");
+    parts.push(
+      meta.nonJsonChanged
+        ? "Body: non-JSON content changed"
+        : "Body: non-JSON content identical",
+    );
   if (meta.truncated) parts.push(`Truncated: ${meta.reason}`);
   return parts.length ? parts.join("; ") : "No material difference observed";
+}
+
+function normalizeLimits(limits: Partial<DeepDiffLimits>): DeepDiffLimits {
+  const normalized = { ...DEFAULT_LIMITS };
+  for (const key of Object.keys(normalized) as Array<keyof DeepDiffLimits>) {
+    const value = limits[key];
+    if (Number.isSafeInteger(value) && value! >= 0)
+      normalized[key] = Math.min(value!, HARD_LIMITS[key]);
+  }
+  return normalized;
+}
+
+function compareNonJsonBodies(
+  baseline: Observation,
+  result: Observation,
+): { changed: boolean; before: string | null; after: string | null } {
+  const before = safeBodyText(baseline);
+  const after = safeBodyText(result);
+  return { changed: before !== after, before, after };
+}
+
+function safeBodyText(observation: Observation): string | null {
+  const body = observation.http?.response.body ?? observation.responseBodyShape;
+  if (body === null) return null;
+  return redactBody(body, responseContentType(observation));
+}
+
+function responseContentType(observation: Observation): string {
+  const primary = observation.http?.response.headers ?? {};
+  const secondary = observation.responseHeaders;
+  for (const [name, value] of Object.entries(primary))
+    if (name.toLowerCase() === "content-type") return value;
+  for (const [name, value] of Object.entries(secondary))
+    if (name.toLowerCase() === "content-type") return value;
+  return "text/plain";
+}
+
+function boundedValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+  return serialized !== undefined && serialized.length > MAX_RECORDED_VALUE_CHARS
+    ? `[value omitted: ${serialized.length} characters]`
+    : value;
+}
+
+function canonicalHeaders(
+  headers: Record<string, string>,
+): Map<string, string[]> {
+  const canonical = new Map<string, string[]>();
+  for (const [name, value] of Object.entries(headers)) {
+    const normalized = name.toLowerCase();
+    canonical.set(normalized, [...(canonical.get(normalized) ?? []), value]);
+  }
+  for (const values of canonical.values()) values.sort();
+  return canonical;
+}
+
+function arraysEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
