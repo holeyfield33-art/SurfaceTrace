@@ -106,7 +106,7 @@ Evidence is logically append-only and hash-linked. Replay appends distinct recor
 
 1. Authorization is established before traffic enters an investigation.
 2. Missing or invalid scope produces zero outbound requests.
-3. Controlled experiments contain exactly one declared mutation.
+3. Controlled experiments are intended to contain exactly one declared mutation. **Known gap:** the classifier (`compareSafeRequests` in `packages/server/src/app.ts`) does not detect a second undeclared change within the same mutation category, or any additional body difference when the declared mutation is a body field; an experiment can be certified `"controlled"` despite more than one real difference. It correctly rejects mutations spanning two *different* categories.
 4. One explicit approval sends one request.
 5. Redirects require a new approval.
 6. There are no automatic retries.

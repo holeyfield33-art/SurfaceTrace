@@ -2,6 +2,12 @@
 
 This is the canonical workflow for authorized SurfaceTrace investigations. SurfaceTrace organizes tester decisions and evidence; it does not determine that a vulnerability exists.
 
+## Provenance and Verification Status
+
+SurfaceTrace treats provenance as a first-class review requirement. Every observation, annotation, hypothesis, experiment, and evidence record is tied to either a captured observation, a manual investigator action, or an inferred review question. The database and evidence chain are designed to reject silent tampering: the canonical project state, active investigation anchors, and linked evidence records must remain internally consistent or the project is refused on open.
+
+The current release audit refreshed the project documentation to match the verified repository state, cleaned local artifacts that were not part of the release branch, and synchronized the user-facing change log with the branch history. This gives a single, trackable provenance path from the repo state to the written release notes.
+
 ## Passive Investigation
 
 ```text
@@ -35,7 +41,9 @@ known baseline
 -> hash-linked evidence
 ```
 
-Choose two imported observations from the same endpoint and declare the single request difference that connects them. The server rejects zero mutations, multiple mutation categories, unrelated observations, and undeclared request differences. The deterministic diff reports status, headers, nested body and array changes, type changes, and truncation without producing a vulnerability verdict.
+Choose two imported observations from the same endpoint and declare the single request difference that connects them. The server rejects zero mutations, multiple *categories* of mutation (for example a query change paired with a header change), and unrelated observations.
+
+**Known limitation:** the undeclared-difference check does not currently catch a second change within the *same* category as the declared mutation (for example two query parameters changing when one was declared) or an unrelated body change alongside a declared body-field mutation. An experiment can be certified `"controlled"` even though more than the declared value differs. Manually re-check the raw request/response pair before trusting a `"controlled"` classification. The deterministic diff itself (status, headers, nested body and array changes, type changes, truncation) is accurate and unaffected — only the "was this really one variable" classification has this gap.
 
 ## Active Replay
 

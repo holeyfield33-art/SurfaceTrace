@@ -76,6 +76,10 @@ In a normal local Windows workspace, these are direct loopback listeners and may
 
 Forwarding headers such as `X-Forwarded-For` and `Forwarded` are not trusted authentication evidence. The development and preview proxies may inject a configured API token server-side, but a loopback proxy hop never converts an unauthenticated remote caller into a trusted caller. Before authorized testing, inspect port visibility, active listeners, and firewall rules; do not assume that a browser URL, VS Code port panel, container mapping, or host firewall is private by default.
 
+## Release Notes and Provenance
+
+The repository has been reconciled to the current remote main branch, the local worktree has been cleaned of stray generated artifacts, and the release documentation now reflects the verified provenance state for the current release. See [CHANGELOG.md](CHANGELOG.md) for the public-facing summary of changes and status.
+
 ## Course and Run Manual
 
 **[Full beginner course and run manual -> docs/COURSE_AND_RUN_MANUAL.md](docs/COURSE_AND_RUN_MANUAL.md)**
@@ -96,5 +100,14 @@ docker-compose.yml   Optional development-container service
 ## Status and License
 
 Implementation is complete through P9: raw HTTP inspection, identity investigation, experiment notebook, deterministic deep diff, threat mapping, SSRF reasoning signals, SQLite persistence, runtime scope enforcement, and human-approved active replay.
+
+### Known Limitations
+
+An adversarial re-verification pass (2026-09-02) confirmed the prior release-blocking issues around project isolation, scope-encoding bypass, HAR redaction, evidence-tamper detection, the replay-preview contract, and malformed-request handling are fixed and hold up under direct execution, not just static review. It also found the following issues, which are still open:
+
+- **Controlled-experiment classification gap.** An experiment can be certified `"controlled"` (single-variable) despite a second undeclared change within the same mutation category, or an unrelated body change alongside a declared body-field mutation. See `docs/ARCHITECTURE.md` Safety Invariant 3 and `docs/WORKFLOW.md`.
+- **Experiment "close" does not gate replay server-side.** The UI states that closing an experiment "will prevent further execution," but `/replay/prepare` and `/replay/:token/send` do not check experiment status; a closed experiment's baseline remains fully replayable and fires a real outbound request.
+- **`ready_for_peer_review` is a self-attested free-text field.** It is not checked against the experiment's actual linked evidence records, so it can be set without any real supporting evidence.
+- **Evidence-ledger canonicalization has a `__proto__`-keyed edge case.** `packages/core/src/evidence/hash.ts`'s key-sorting step silently drops a JSON key literally named `__proto__` before hashing, which is a real weakness in the hashing primitive. Redundant plain-string fields elsewhere in current payloads currently limit real-world impact, but the primitive itself should be hardened (e.g. build the sorted object with `Object.create(null)` instead of bracket assignment).
 
 Licensed under Apache-2.0.

@@ -444,7 +444,7 @@ Purpose: preserve causal clarity.
 
 Inspect the exact baseline request and response, choose one mutation category, and record the expected outcome. Allowed categories are path parameter, query parameter, header, body field, or identity. The pitfall is hiding additional request changes behind vague notes.
 
-Checkpoint answer: zero or multiple mutation categories are rejected.
+Checkpoint answer: zero mutation categories, or two *different* mutation categories together, are rejected. The check does not currently catch a second change within the same category (a second query parameter or header also differing) or an unrelated body change alongside a declared body-field mutation, so treat "declare exactly one variable" as your own discipline, not something the server fully verifies for you — inspect the raw request/response pair yourself before trusting a `"controlled"` label.
 
 ### Stage 7A: Compare Imported Observations
 
