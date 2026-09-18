@@ -36,13 +36,13 @@ npm run dev:all
 
 `npm run dev:all` keeps all three services in one foreground process and stops the remaining services if any one exits. For focused development, `npm run dev`, `npm run dev:web`, and `npm run lab` still start the API, UI, and lab individually.
 
-Open `http://localhost:5173`. The UI proxy exposes API health at `http://localhost:5173/api/health` and the controlled lab at `http://localhost:5173/lab/`. Direct loopback health remains available at `http://127.0.0.1:8787/health`.
+Open `http://localhost:5173`. The UI proxy exposes API health at `http://localhost:5173/api/health` and the controlled lab at `http://localhost:5173/lab/projects/100`. Direct loopback health remains available at `http://127.0.0.1:8787/health`.
 
 ### Codespaces and Dev Containers
 
 Opening the repository in its development container starts `npm run dev:all` automatically. Ports `5173`, `8787`, and `4040` are labeled and forwarded; port `5173` is the supported browser entry point and proxies `/api` and `/lab` to the loopback-only services inside the container. Vite admits only localhost, Codespaces hostnames on the current forwarding domain, and explicitly configured hosts.
 
-Open only the **SurfaceTrace UI** (`5173`) port link. The API and Controlled Replay Lab port notifications are internal-only: they never serve a page, only a bare JSON health payload, so following either link is expected to look broken even when the container is healthy. Use them through the UI proxy instead, at `/api/health` and `/lab/`.
+Open only the **SurfaceTrace UI** (`5173`) port link. The API and Controlled Replay Lab port notifications are internal-only: they never serve a page, only a bare JSON health payload, so following either link is expected to look broken even when the container is healthy. Use them through the UI proxy instead, at `/api/health` and `/lab/projects/100`.
 
 If you change `.devcontainer/devcontainer.json`, `docker-compose.yml`, or `Dockerfile`, reconnecting to an existing codespace or container is not enough — run **Rebuild Container** (Codespaces or Dev Containers command palette). Docker Compose only evaluates `${CODESPACE_NAME}`-style environment substitution once, at container creation, so a container created before such a change won't pick it up until it's rebuilt.
 
@@ -57,7 +57,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Only `127.0.0.1:5173` is published to the host. Use `http://127.0.0.1:5173/api/health` and `http://127.0.0.1:5173/lab/`; API port `8787` and lab port `4040` remain on container loopback. `docker compose down` stops the services without deleting the named data volume.
+Only `127.0.0.1:5173` is published to the host. Use `http://127.0.0.1:5173/api/health` and `http://127.0.0.1:5173/lab/projects/100`; API port `8787` and lab port `4040` remain on container loopback. `docker compose down` stops the services without deleting the named data volume.
 
 If all three server test suites fail with `NODE_MODULE_VERSION` or `better_sqlite3.node`, your terminal is using a different Node version from the one that installed dependencies. Run `node --version`; it must report Node 22. If you use a Node version manager, select the supported runtime and repair the native installation with:
 
@@ -68,7 +68,39 @@ npm install
 npm test
 ```
 
-On a Windows workstation with a pinned Node 22 toolchain under `%USERPROFILE%\.toolchains\node-v22*` (not on PATH by default), the equivalent PowerShell selection is `$env:PATH = "$env:USERPROFILE\.toolchains\node-v22.23.2-win-x64;$env:PATH"`, or run `npm run win:dev`, which detects that toolchain automatically and starts `dev:all` under it without touching your permanent PATH. This fallback is machine-specific; other contributors should use their own Node manager or Node 22 installation. `npm install` ensures native dependencies match the selected runtime, and `npm test` confirms the repair. Do not rebuild dependencies under Node 24 and then return to Node 22; switching runtimes recreates the same native ABI mismatch.
+### Windows PowerShell
+
+For Docker use, open a terminal in this repository and run `docker compose up -d --wait`.
+Open `http://127.0.0.1:5173`; stop it with `docker compose stop`. Docker supplies
+Node 22 and keeps its dependencies and database in separate named volumes.
+
+For native Windows development, the helper uses Node 22 already on PATH or a
+pinned toolchain under `%USERPROFILE%\.toolchains\node-v22.*-win-*`. It selects
+that runtime ahead of other Node versions and invokes its matching `npm.cmd`.
+From this repository in PowerShell:
+
+```powershell
+# First native setup, or repair after installing dependencies with another Node:
+.\scripts\win-dev.ps1 -Install -UseOnly
+node --version  # must be v22.x
+npm test
+
+# Stop Docker before native startup: both use port 5173.
+docker compose stop
+npm run dev:all
+```
+
+For subsequent native starts in a new terminal, run `npm run win:dev`. To select
+Node 22 for other commands in the current PowerShell session, run
+`.\scripts\win-dev.ps1 -UseOnly`. A command such as
+`.\scripts\win-dev.ps1 -Script typecheck` also selects the runtime automatically.
+The helper works from other directories because it runs npm at the repository
+root. It does not change the machine's permanent PATH.
+
+Do not run native and Docker development servers simultaneously. Native Windows
+uses the local `data/` directory; Docker uses its named data volume. Switching
+between them does not transfer investigation data. Do not install dependencies
+under Node 24 and then return to Node 22; that recreates the native ABI mismatch.
 
 SurfaceTrace is a single-user local tool, not a multi-tenant service. Local processes bind to loopback by default. Containers bind only Vite to the container interface required for forwarding, while API and lab processes remain on container loopback; Docker publishes only the web proxy on host loopback. If `SURFACETRACE_API_TOKEN` is configured, every protected API request requires it, including requests arriving over loopback; the Vite development proxy reads the token at runtime and adds it server-side without compiling it into browser JavaScript. Project, observation, identity, and evidence state all belong to one local operator workspace; public exposure and shared multi-user deployment are unsupported.
 
