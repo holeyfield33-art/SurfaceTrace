@@ -140,7 +140,7 @@ test("isolated API restart restores persisted investigation state", async () => 
   let api: ChildProcess | undefined;
   try {
     api = startApi(port, database);
-    await waitForHealth(port);
+    await waitForHealth(port, api);
     const imported = await fetch(`http://127.0.0.1:${port}/import/har`, {
       method: "POST",
       headers: {
@@ -152,7 +152,7 @@ test("isolated API restart restores persisted investigation state", async () => 
     expect(imported.status).toBe(200);
     await stop(api);
     api = startApi(port, database);
-    await waitForHealth(port);
+    await waitForHealth(port, api);
     const inventory = await fetch(`http://127.0.0.1:${port}/inventory`, {
       headers: { Authorization: `Bearer ${apiToken}` },
     });
@@ -214,16 +214,21 @@ function startApi(port: number, database: string): ChildProcess {
   });
 }
 
-async function waitForHealth(port: number): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+async function waitForHealth(port: number, child: ChildProcess): Promise<void> {
+  // Cold Node/SQLite startup can exceed two seconds on a Windows workstation.
+  // Wait for actual readiness, bounded below the enclosing test timeout.
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error(`API exited before readiness (code ${child.exitCode}, signal ${child.signalCode})`);
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
     } catch {
       // The process may still be binding its loopback listener.
     }
     await new Promise((resolveWait) => {
-      setTimeout(resolveWait, 50);
+      setTimeout(resolveWait, 100);
     });
   }
   throw new Error(`API did not start on loopback port ${port}`);

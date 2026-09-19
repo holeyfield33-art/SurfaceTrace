@@ -112,6 +112,12 @@ Forwarding headers such as `X-Forwarded-For` and `Forwarded` are not trusted aut
 
 The repository has been reconciled to the current remote main branch, the local worktree has been cleaned of stray generated artifacts, and the release documentation now reflects the verified provenance state for the current release. See [CHANGELOG.md](CHANGELOG.md) for the public-facing summary of changes and status.
 
+## Start learning
+
+Open **CLASSROOM**, then **START OR CONTINUE THE BEGINNER COURSE**. The 24 guided lessons assume no coding or cybersecurity background. Each has an explanation, worked example, ordered exercise, expected result, troubleshooting, notebook prompt, answer, and AI tutor prompt. Learn DevTools and Burp before the optional GDK exercise. Progress stays in your browser.
+
+The older 135-topic syllabus is available separately as short primers and outlines, not a prerequisite checklist. See [the beginner course guide](docs/BEGINNER_COURSE.md) and [how GDK fits](docs/GDK_GUIDE.md).
+
 ## Course and Run Manual
 
 **[Full beginner course and run manual -> docs/COURSE_AND_RUN_MANUAL.md](docs/COURSE_AND_RUN_MANUAL.md)**

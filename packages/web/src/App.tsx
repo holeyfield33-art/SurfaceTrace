@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  beginnerLessons,
   completedLessonCount,
   curriculum,
   lessonById,
@@ -7,6 +8,7 @@ import {
   type Lesson,
   type SkillState,
 } from "./lessons/curriculum";
+import { GuidedLesson } from "./lessons/GuidedLesson";
 import { recommendLessons } from "./lessons/recommend";
 import "./inspector.css";
 
@@ -411,8 +413,9 @@ export default function App() {
         <Classroom
           selected={lessonId ? lessonById(lessonId) : undefined}
           skills={skills}
-          onOpen={(item) => openLesson(item, "classroom")}
+          onOpen={(item) => openLesson(item, returnView)}
           onSkill={setSkill}
+          onIndex={() => { setLessonId(null); localStorage.removeItem("surfacetrace:lesson"); }}
           onReturn={() => setView(returnView)}
           recommendation={recommendations[0]}
         />
@@ -3163,6 +3166,7 @@ function Classroom({
   onOpen,
   onSkill,
   onReturn,
+  onIndex,
   recommendation,
 }: {
   selected?: Lesson;
@@ -3170,13 +3174,16 @@ function Classroom({
   onOpen: (lesson: Lesson) => void;
   onSkill: (id: string, state: SkillState) => void;
   onReturn: () => void;
+  onIndex: () => void;
   recommendation?: ReturnType<typeof recommendLessons>[number];
 }) {
   const completeLessonTotal = completedLessonCount();
   const outlineTotal = curriculum.length - completeLessonTotal;
+  if (selected?.guided) return <GuidedLesson lesson={selected.guided} state={skills[selected.id] ?? "Not Started"} onSkill={(state) => onSkill(selected.id, state)} onOpen={onOpen} onIndex={onIndex} onReturn={onReturn} />;
   if (selected)
     return (
       <main className="lesson-page reveal">
+        <button className="back" onClick={onIndex}>ALL LESSONS</button>
         <button className="back" onClick={onReturn}>
           &lt;- RETURN TO INVESTIGATION
         </button>
@@ -3251,11 +3258,15 @@ function Classroom({
         <span className="eyebrow">CLASSROOM / LOCAL PROGRESS</span>
         <h1>Learn what the traffic is telling you.</h1>
         <p>
-          {completeLessonTotal} complete lessons bridge code, HTTP, application
-          behavior, and security reasoning. The remaining {outlineTotal} catalog entries are syllabus
-          outlines, not finished lessons; use the Course and Run Manual for the
-          complete beginner path.
+          Start with these {beginnerLessons.length} guided lessons. No coding or security experience
+          is required. Learn DevTools, Burp Suite, and SurfaceTrace through small local
+          exercises, then practice forming and testing your own questions with AI assistance.
         </p>
+        <button className="action coral" onClick={() => onOpen(beginnerLessons.find((item) => skills[item.id] !== "Comfortable") ?? beginnerLessons[0]!)}>
+          START OR CONTINUE THE BEGINNER COURSE
+        </button>
+        <p>Progress is saved in this browser. Practice at your own pace; the times are estimates.
+          GDK is optional and introduced in lesson 21.</p>
         {recommendation && (
           <button
             className="action coral"
@@ -3265,6 +3276,20 @@ function Classroom({
           </button>
         )}
       </div>
+      <section className="track beginner-track">
+        <div><span>START HERE</span><h2>Your guided beginner course</h2>
+          <small>{beginnerLessons.filter((item) => skills[item.id] === "Comfortable").length} / {beginnerLessons.length} comfortable</small>
+        </div>
+        <div className="lesson-list">{beginnerLessons.map((item, index) => (
+          <button key={item.id} onClick={() => onOpen(item)}>
+            <span>{String(index + 1).padStart(2, "0")}. {item.title}</span>
+            <small>{item.estimatedMinutes} min / {skills[item.id] ?? "Not Started"}</small>
+          </button>
+        ))}</div>
+      </section>
+      <details className="reference-syllabus"><summary>Optional reference syllabus</summary>
+        <p>{completeLessonTotal} short primers and {outlineTotal} topic outlines.
+          These are additional references; you do not need to finish them before beginning the guided course.</p>
       {trackNames.map((track) => {
         const lessons = curriculum.filter((item) => item.track === track);
         const complete = lessons.filter(
@@ -3292,6 +3317,7 @@ function Classroom({
           </section>
         );
       })}
+      </details>
     </main>
   );
 }

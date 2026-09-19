@@ -1,3 +1,5 @@
+import { beginnerCourse, type BeginnerLesson } from "./beginner-course";
+
 export type SkillState = "Not Started" | "Learning" | "Practiced" | "Comfortable";
 
 export interface Lesson {
@@ -10,6 +12,7 @@ export interface Lesson {
   concepts: string[];
   relatedSignals: string[];
   objectives: string[];
+  guided?: BeginnerLesson;
   content?: { concept: string; example: string; connection: string; inspect: string; apply: string };
   exercise?: string;
   quickCheck?: string;
@@ -192,20 +195,20 @@ complete("http-16-", {
 }, "Inspect a redirect response and identify the next manual step.", "Should a redirect be followed automatically?", []);
 
 complete("http-17-", {
-  concept: "A one-variable experiment changes exactly one request dimension so the response can be interpreted causally.",
-  example: "Baseline: /api/projects/100; Comparison: /api/projects/200",
-  connection: "SurfaceTrace rejects zero or multiple mutation categories because the causal story would be unclear.",
-  inspect: "Record the baseline, the declared mutation, and what must stay constant.",
-  apply: "Use the experiment notebook to compare two imported observations or one approved replay.",
-}, "Draft a baseline and a single mutation for one request.", "Why does SurfaceTrace reject multiple mutation categories?", []);
+  concept: "Browser storage keeps data on your device. Cookies, local storage, and session storage have different lifetimes and access rules.",
+  example: "A theme preference may live in localStorage; a session cookie may identify a login.",
+  connection: "Stored data is a clue about application state, not proof of server-side authority.",
+  inspect: "In DevTools Application, inspect storage names on your own local application. Keep credential values private.",
+  apply: "Record the storage type and purpose. Use beginner lesson 10 for the full walkthrough.",
+}, "Find one storage key and describe its purpose without copying its value.", "Does changing a local role label change the server's authorization rule?", []);
 
 complete("http-18-", {
-  concept: "Response comparison helps a human decide what changed, but comparison is not the same as a security verdict.",
-  example: "Same status, different body field values, or a different redirect target.",
-  connection: "SurfaceTrace reports deterministic diffs so you can separate observation from interpretation.",
-  inspect: "Check status, headers, nested fields, and truncation before making any conclusion.",
-  apply: "Use the diff view to record what changed and what stayed constant.",
-}, "List three kinds of differences a diff can report.", "Does a diff itself prove a vulnerability?", []);
+  concept: "CORS is a browser mechanism that lets a server allow scripts on another origin to read certain responses. It is not authentication.",
+  example: "An origin combines scheme, hostname, and port. Changing the port changes the origin.",
+  connection: "A browser CORS error and a successful Burp request can coexist because Burp does not enforce browser origin restrictions.",
+  inspect: "Inspect Origin and Access-Control-Allow-Origin headers when present. Some cross-origin requests have an OPTIONS preflight.",
+  apply: "Record the browser context and server response before interpreting a CORS error. Do not infer access control from that error.",
+}, "Explain why two localhost URLs with different ports have different origins.", "Does a successful Repeater request alone prove a CORS vulnerability?", []);
 
 complete("security-02-", {
   concept: "Authentication establishes identity; authorization decides what that identity may access.",
@@ -223,14 +226,6 @@ complete("javascript-16-", {
   apply: "SurfaceTrace records JSON shape paths and inferred types.",
 }, "List field paths in a small JSON body.", "What is the path to the email field?", ["input:body-json"]);
 
-complete("security-02-", {
-  concept: "Authentication establishes identity; authorization decides what that identity may access.",
-  example: "GET /api/projects/123",
-  connection: "An object ID is an observation. The security question is whether the server enforces ownership and role access.",
-  inspect: "Identify the resource ID and expected access boundary before testing.",
-  apply: "Return to the endpoint and review its authorization hypothesis using approved test accounts.",
-}, "Write the expected access rule for one object endpoint.", "Does changing an ID alone prove IDOR?", ["signal:object-id-in-path-or-input"]);
-
 export const trackNames = tracks.map(([, name]) => name);
 
 export function completedLessonCount(items: Lesson[] = curriculum): number {
@@ -238,5 +233,12 @@ export function completedLessonCount(items: Lesson[] = curriculum): number {
 }
 
 export function lessonById(id: string): Lesson | undefined {
-  return curriculum.find((lesson) => lesson.id === id);
+  return beginnerLessons.find((lesson) => lesson.id === id) ?? curriculum.find((lesson) => lesson.id === id);
 }
+
+export const beginnerLessons: Lesson[] = beginnerCourse.map((guided, index) => ({
+  id: guided.id, title: guided.title, track: "Start here: guided beginner course",
+  level: "foundation", estimatedMinutes: guided.minutes,
+  prerequisites: index ? [beginnerCourse[index - 1]!.id] : [],
+  concepts: [], relatedSignals: [], objectives: [guided.goal], guided,
+}));
