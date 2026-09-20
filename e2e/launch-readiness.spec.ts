@@ -25,7 +25,7 @@ test("built application completes the guarded investigation workflow", async ({
 
   await page.locator('input[type="file"]').setInputFiles(fixture);
   await expect(page.getByText("2", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "OPEN INVESTIGATION" }).click();
+  await page.getByRole("button", { name: "OPEN INVESTIGATION ->", exact: true }).click();
   await expect(page.getByRole("group", { name: "Attack surface graph" })).toBeVisible();
   await expect(page.getByText("GET /lab/projects/{id}").first()).toBeVisible();
 

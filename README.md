@@ -118,6 +118,12 @@ Open **CLASSROOM**, then **START OR CONTINUE THE BEGINNER COURSE**. The 24 guide
 
 The older 135-topic syllabus is available separately as short primers and outlines, not a prerequisite checklist. See [the beginner course guide](docs/BEGINNER_COURSE.md) and [how GDK fits](docs/GDK_GUIDE.md).
 
+## Personal lab notes and scope
+
+Use **NOTES** (or **OPEN MY LAB NOTES** on Command Center) for a reusable lab plan: target, identity, one change, request limit, stop condition, expected result, observed facts, inferences, and next question. Each lab is separate. Edits autosave in this browser at this origin; they are not server evidence and are not synced. Download a text copy before clearing browser storage or moving to another browser/address.
+
+The Command Center scope panel includes field explanations and a local-lab walkthrough. **FILL LOCAL LAB EXAMPLE** only fills a draft. Review it, explicitly enable the local exercise if intended, and **SAVE SCOPE**. **CHECK SCOPE - NO NETWORK** checks the saved rules; it does not contact the candidate target. Only the separate active-replay preview and **SEND THIS REQUEST** workflow in Investigation sends a target request. Notes never configure scope automatically.
+
 ## Course and Run Manual
 
 **[Full beginner course and run manual -> docs/COURSE_AND_RUN_MANUAL.md](docs/COURSE_AND_RUN_MANUAL.md)**

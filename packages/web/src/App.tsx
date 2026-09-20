@@ -8,11 +8,12 @@ import {
   type Lesson,
   type SkillState,
 } from "./lessons/curriculum";
+import { LabNotes } from "./LabNotes";
 import { GuidedLesson } from "./lessons/GuidedLesson";
 import { recommendLessons } from "./lessons/recommend";
 import "./inspector.css";
 
-type View = "command" | "investigation" | "classroom" | "evidence";
+type View = "command" | "investigation" | "classroom" | "evidence" | "notes";
 interface Endpoint {
   id: string;
   method: string;
@@ -371,7 +372,7 @@ export default function App() {
         </div>
       </header>
       <nav className="primary-nav" aria-label="Main navigation">
-        {(["command", "investigation", "classroom", "evidence"] as View[]).map(
+        {(["command", "investigation", "classroom", "notes", "evidence"] as View[]).map(
           (item) => (
             <button
               key={item}
@@ -383,6 +384,7 @@ export default function App() {
           ),
         )}
       </nav>
+      <LabNotes active={view === "notes"} />
       {view === "command" && (
         <CommandCenter
           inventory={inventory}
@@ -392,6 +394,7 @@ export default function App() {
           busy={busy}
           error={error}
           onImport={importFile}
+          onNotes={() => setView("notes")}
           onInvestigate={() => setView("investigation")}
           onLesson={(item) => openLesson(item, "command")}
           scope={scope}
@@ -439,6 +442,7 @@ function CommandCenter({
   error,
   onImport,
   onInvestigate,
+  onNotes,
   onLesson,
   scope,
   onScope,
@@ -451,6 +455,7 @@ function CommandCenter({
   error: string | null;
   onImport: (file: File) => void;
   onInvestigate: () => void;
+  onNotes: () => void;
   onLesson: (lesson: Lesson) => void;
   scope: ProjectScope | null;
   onScope: (scope: ProjectScope) => void;
@@ -613,8 +618,19 @@ function CommandCenter({
           <Empty text="Import evidence to review coverage questions." />
         )}
       </section>
+      <section className="panel notes-home">
+        <PanelLabel number="07" label="YOUR LAB NOTES" />
+        <h2>Start with a small plan.</h2>
+        <p>Record your target, test identity, one change, request limit, and stop condition.
+          Then separate observed facts from your interpretations.  Both records returned 200 
+          is an observation;  the permissions are broken  needs more evidence.</p>
+        <p>Each lab gets its own reusable template. Notes autosave in this browser and can be
+          downloaded as text. They do not enable requests or change the scope settings below.</p>
+        <button className="action" onClick={onNotes}>OPEN MY LAB NOTES</button>
+      </section>
       <ScopePanel
-        key={scope?.id ?? "no-scope"}
+        onInvestigate={onInvestigate}
+        hasObservations={inventory.observations.length > 0}
         scope={scope}
         onScope={onScope}
       />
@@ -625,9 +641,13 @@ function CommandCenter({
 function ScopePanel({
   scope,
   onScope,
+  onInvestigate,
+  hasObservations,
 }: {
   scope: ProjectScope | null;
   onScope: (scope: ProjectScope) => void;
+  onInvestigate: () => void;
+  hasObservations: boolean;
 }) {
   const [hosts, setHosts] = useState(scope?.allowedHosts.join(", ") ?? "");
   const [protocols, setProtocols] = useState(
@@ -657,97 +677,186 @@ function ScopePanel({
     requestSent: boolean;
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [draftChanged, setDraftChanged] = useState(false);
+  useEffect(() => {
+    setHosts(scope?.allowedHosts.join(", ") ?? "");
+    setProtocols(scope?.allowedProtocols.join(", ") ?? "https");
+    setPorts(scope?.allowedPorts.join(", ") ?? "443");
+    setAllowedPaths(scope?.allowedPathPrefixes.join(", ") ?? "/");
+    setExcludedPaths(scope?.excludedPathPrefixes.join(", ") ?? "");
+    setMethods(scope?.allowedMethods.join(", ") ?? "GET");
+    setRate(String(scope?.maxRequestsPerMinute ?? 10));
+    setActive(scope?.active ?? false);
+    setManualStop(scope?.stopConditions.manualStop ?? false);
+    setDraftChanged(false);
+    setDecision(null);
+  }, [scope]);
+  useEffect(() => { setDecision(null); }, [candidateMethod, candidateUrl]);
+  function changed() {
+    setDraftChanged(true);
+    setDecision(null);
+    setMessage(null);
+  }
+  function localExample() {
+    setHosts("127.0.0.1"); setProtocols("http"); setPorts("4040");
+    setAllowedPaths("/lab/projects/"); setExcludedPaths(""); setMethods("GET");
+    setRate("2"); setActive(false); setManualStop(false);
+    setCandidateMethod("GET"); setCandidateUrl("http://127.0.0.1:4040/lab/projects/200");
+    changed();
+    setMessage("Local lab values filled in, not saved or enabled. Read the steps below before enabling scope.");
+  }
   const csv = (value: string) =>
     value
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
   async function save(): Promise<void> {
-    const response = await fetch("/api/scope", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        active,
-        allowedHosts: csv(hosts),
-        allowedProtocols: csv(protocols),
-        allowedPorts: csv(ports).map(Number),
-        allowedPathPrefixes: csv(allowedPaths),
-        excludedPathPrefixes: csv(excludedPaths),
-        allowedMethods: csv(methods),
-        maxRequestsPerMinute: Number(rate),
-        stopConditions: {
-          manualStop,
-          maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
-          repeatedServerErrors:
-            scope?.stopConditions.repeatedServerErrors ?? false,
-          authenticationLost:
-            scope?.stopConditions.authenticationLost ?? false,
-          customNote: null,
-        },
-        notes: scope?.notes ?? null,
-      }),
-    });
-    const result = (await response.json()) as {
-      scope?: ProjectScope;
-      error?: string;
-    };
-    if (!response.ok || !result.scope) {
-      setMessage(result.error ?? "Scope could not be saved");
-      return;
-    }
-    onScope(result.scope);
-    setMessage("Scope saved. No request was sent.");
+    setPending(true); setMessage(null); setDecision(null);
+    try {
+      const response = await fetch("/api/scope", {
+        method: "PUT",
+        signal: AbortSignal.timeout(10_000),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          active,
+          allowedHosts: csv(hosts),
+          allowedProtocols: csv(protocols),
+          allowedPorts: csv(ports).map(Number),
+          allowedPathPrefixes: csv(allowedPaths),
+          excludedPathPrefixes: csv(excludedPaths),
+          allowedMethods: csv(methods),
+          maxRequestsPerMinute: Number(rate),
+          stopConditions: {
+            manualStop,
+            maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
+            repeatedServerErrors:
+              scope?.stopConditions.repeatedServerErrors ?? false,
+            authenticationLost:
+              scope?.stopConditions.authenticationLost ?? false,
+            customNote: null,
+          },
+          notes: scope?.notes ?? null,
+        }),
+      });
+      const result = (await response.json()) as {
+        scope?: ProjectScope;
+        error?: string;
+      };
+      if (!response.ok || !result.scope) {
+        setMessage(result.error ?? "Scope could not be saved");
+        return;
+      }
+      onScope(result.scope);
+      setMessage("Scope saved. No request was sent.");
+    } catch {
+      setMessage("The local API could not complete this action. Check /api/health, then try again. Your edits are still here.");
+    } finally { setPending(false); }
   }
   async function resetStop(
     condition: "repeatedServerErrors" | "authenticationLost",
   ): Promise<void> {
-    const response = await fetch("/api/scope/stops/reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ condition }),
-    });
-    const result = (await response.json()) as {
-      scope?: ProjectScope;
-      error?: string;
-    };
-    if (!response.ok || !result.scope) {
-      setMessage(result.error ?? "Automatic stop could not be reset");
-      return;
-    }
-    onScope(result.scope);
-    setMessage(
-      condition === "repeatedServerErrors"
-        ? "Server-error stop reset. Recheck target health before replay."
-        : "Authentication-loss stop reset. Recheck credentials before replay.",
-    );
+    setPending(true); setMessage(null); setDecision(null);
+    try {
+      const response = await fetch("/api/scope/stops/reset", {
+        method: "POST",
+        signal: AbortSignal.timeout(10_000),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ condition }),
+      });
+      const result = (await response.json()) as {
+        scope?: ProjectScope;
+        error?: string;
+      };
+      if (!response.ok || !result.scope) {
+        setMessage(result.error ?? "Automatic stop could not be reset");
+        return;
+      }
+      onScope(result.scope);
+      setMessage(
+        condition === "repeatedServerErrors"
+          ? "Server-error stop reset. Recheck target health before replay."
+          : "Authentication-loss stop reset. Recheck credentials before replay.",
+      );
+    } catch {
+      setMessage("The local API could not complete this action. Check /api/health, then try again. Your edits are still here.");
+    } finally { setPending(false); }
   }
   async function preview(): Promise<void> {
-    const response = await fetch("/api/scope/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
-    });
-    const result = (await response.json()) as {
-      requestSent: boolean;
-      decision: { allowed: boolean; reasonCode: string; reason: string };
-    };
-    setDecision({ ...result.decision, requestSent: result.requestSent });
+    setDecision(null); setMessage(null);
+    if (draftChanged) { setMessage("Save your scope edits first. The check uses saved settings, not the draft form."); return; }
+    try {
+      const url = new URL(candidateUrl);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
+    } catch { setMessage("Enter a complete http:// or https:// URL without credentials, including the port and path."); return; }
+    setPending(true);
+    try {
+      const response = await fetch("/api/scope/preview", {
+        method: "POST",
+        signal: AbortSignal.timeout(10_000),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method: candidateMethod, url: candidateUrl }),
+      });
+      const result = await response.json() as {
+        error?: string; requestSent?: boolean;
+        decision?: { allowed: boolean; reasonCode: string; reason: string };
+      };
+      if (!response.ok || !result.decision || typeof result.requestSent !== "boolean") {
+        setMessage(result.error ?? "The scope check could not be completed. Check the local API and try again.");
+        return;
+      }
+      setDecision({ ...result.decision, requestSent: result.requestSent });
+    } catch { setMessage("The local API could not check this URL. Check /api/health, then try again."); }
+    finally { setPending(false); }
   }
   return (
     <section className="panel scope-panel">
-      <PanelLabel number="06" label="RUNTIME SCOPE GATE" />
+      <PanelLabel number="08" label="RUNTIME SCOPE GATE" />
       <div className={`scope-banner ${scope?.active ? "active" : "disabled"}`}>
         {scope?.active
           ? "ACTIVE SCOPE"
           : "NO ACTIVE SCOPE - EXECUTION DISABLED"}
       </div>
       <p>
-        Configure explicit permission for future candidate requests.
-        SurfaceTrace does not send requests from this panel.
+        This is the permission check for requests sent by SurfaceTrace's active replay tool.
+        You can import traffic, take notes, and compare saved responses while execution is disabled.
+        Saving scope does not connect to a target or send it a request.
       </p>
-      <div className="scope-grid">
+      <details className="scope-guide" open>
+        <summary>How to use this panel: a local lab walkthrough</summary>
+        <ol>
+          <li>Start SurfaceTrace and its included lab. For this example, use the synthetic
+            <code> e2e/fixtures/replay.har </code> file from your SurfaceTrace folder with
+            IMPORT AUTHORIZED HAR above. Importing replaces the active capture, so preserve earlier work first.</li>
+          <li>Choose FILL LOCAL LAB EXAMPLE below. This fills a draft for the API's local lab:
+            host <code>127.0.0.1</code>, protocol <code>http</code>, port <code>4040</code>,
+            path <code>/lab/projects/</code>, method <code>GET</code>, and 2 requests per minute.
+            It does not save or enable anything.</li>
+          <li>When ready to permit this local exercise, check Enable active scope, leave Manual stop
+            unchecked, and click SAVE SCOPE. Wait for the saved message. Scope describes permission you
+            already have; entering a website here does not grant permission to test it.</li>
+          <li>Check the example URL below. IN SCOPE means the saved rules allow this candidate.
+            It does not prove the server is reachable or that you are logged in. No target request is sent.</li>
+          <li>Open Investigation, select the lab project endpoint, then find ACTIVE REQUEST.
+            Choose Known baseline for project 100, One changed input as path: id, Known value 100,
+            and Proposed value 200. Click PREVIEW ACTIVE REQUEST. Review the exact destination and
+            change. Only SEND THIS REQUEST performs the approved request; CANCEL sends nothing.</li>
+        </ol>
+        <p><strong>Which port?</strong> Your browser uses 5173 for SurfaceTrace and its proxied lab pages.
+          This example capture uses 4040, where the replay service reaches the included lab in both
+          the standard Docker and native setups. Scope must match the actual replay URL. GitLab GDK
+          at Windows port 3000 is separate; Docker loopback does not automatically reach it.
+          Begin with imported GitLab captures for passive comparisons.</p>
+        <p><strong>Two different limits:</strong>  2 requests per minute  is a rate cap, not a total
+          two-request budget. Track your exercise total in Notes. To block later sends, check Manual stop
+          and SAVE SCOPE. This does not undo or cancel a request already sent.</p>
+      </details>
+      <button className="action" disabled={pending} onClick={localExample}>FILL LOCAL LAB EXAMPLE</button>
+      <p>Use comma-separated values for multiple entries. Examples below are for your included local lab only.</p>
+      <div className="scope-grid" onChangeCapture={changed}>
         <label>
           Allowed hosts
+          <small>Hostname only, without http://, a port, or a path. Example: 127.0.0.1.</small>
           <input
             aria-label="Allowed hosts"
             value={hosts}
@@ -757,6 +866,7 @@ function ScopePanel({
         </label>
         <label>
           Protocols
+          <small>http or https. The included lab uses http.</small>
           <input
             aria-label="Allowed protocols"
             value={protocols}
@@ -765,6 +875,7 @@ function ScopePanel({
         </label>
         <label>
           Ports
+          <small>The destination port as a number. Example: 4040.</small>
           <input
             aria-label="Allowed ports"
             value={ports}
@@ -773,6 +884,7 @@ function ScopePanel({
         </label>
         <label>
           Allowed paths
+          <small>Permitted path prefixes, starting with /. Example: /lab/projects/.</small>
           <input
             aria-label="Allowed paths"
             value={allowedPaths}
@@ -781,6 +893,7 @@ function ScopePanel({
         </label>
         <label>
           Excluded paths
+          <small>Paths to block even when otherwise allowed. Leave blank for this small lab.</small>
           <input
             aria-label="Excluded paths"
             value={excludedPaths}
@@ -790,6 +903,7 @@ function ScopePanel({
         </label>
         <label>
           Methods
+          <small>HTTP actions you permit. Start with GET for the read-only lab.</small>
           <input
             aria-label="Allowed methods"
             value={methods}
@@ -798,6 +912,7 @@ function ScopePanel({
         </label>
         <label>
           Requests per minute
+          <small>Maximum replay request rate; it does not send requests on a schedule.</small>
           <input
             aria-label="Requests per minute"
             type="number"
@@ -807,7 +922,7 @@ function ScopePanel({
           />
         </label>
       </div>
-      <div className="scope-toggles">
+      <div className="scope-toggles" onChangeCapture={changed}>
         <label>
           <input
             type="checkbox"
@@ -839,6 +954,7 @@ function ScopePanel({
               </span>
               <button
                 type="button"
+                disabled={pending}
                 onClick={() => void resetStop("repeatedServerErrors")}
               >
                 RESET SERVER-ERROR STOP
@@ -850,6 +966,7 @@ function ScopePanel({
               <span>Authentication loss detected</span>
               <button
                 type="button"
+                disabled={pending}
                 onClick={() => void resetStop("authenticationLost")}
               >
                 RESET AUTHENTICATION STOP
@@ -858,12 +975,17 @@ function ScopePanel({
           )}
         </div>
       )}
-      <button className="action" onClick={() => void save()}>
+      {draftChanged && <p role="status">Unsaved scope edits. Click SAVE SCOPE before checking a candidate.</p>}
+      <button className="action" disabled={pending} onClick={() => void save()}>
         SAVE SCOPE
       </button>
-      {message && <p>{message}</p>}
+      {pending && <p role="status">Checking with the local API...</p>}
+      {message && <p role="status">{message}</p>}
       <div className="candidate-preview">
         <h3>CANDIDATE REQUEST PREVIEW</h3>
+        <p>Enter a complete URL and select its method. This asks the local API to check saved rules;
+          it does not contact that URL. If denied, read the reason, correct the relevant setting,
+          save, and check again. A saved request-count limit or active stop can also block execution.</p>
         <select
           aria-label="Candidate method"
           value={candidateMethod}
@@ -881,9 +1003,10 @@ function ScopePanel({
           onChange={(event) => setCandidateUrl(event.target.value)}
           placeholder="https://example.test/api/users/100"
         />
-        <button onClick={() => void preview()}>CHECK SCOPE - NO NETWORK</button>
+        <button disabled={pending} onClick={() => void preview()}>CHECK SCOPE - NO NETWORK</button>
         {decision && (
           <div
+            role="status"
             className={`scope-decision ${decision.allowed ? "allow" : "deny"}`}
           >
             <b>{decision.allowed ? "IN SCOPE" : "OUT OF SCOPE"}</b>
@@ -893,6 +1016,8 @@ function ScopePanel({
           </div>
         )}
       </div>
+      <p>{hasObservations ? "Capture loaded. Continue in Investigation when you are ready." : "Import the local lab capture first to populate the baseline and input selectors."}</p>
+      <button className="action" disabled={!hasObservations || pending} onClick={onInvestigate}>OPEN INVESTIGATION FOR REPLAY</button>
     </section>
   );
 }

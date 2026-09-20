@@ -45,3 +45,31 @@ button { color:inherit; }
   .guided-lesson { padding: 1rem; }
   .guided-lesson h1 { font-size: 2rem; }
 }
+
+.lab-notes { max-width: 1000px; margin: 40px auto; padding: 0 24px 40px; }
+.lab-notes h1 { font: 48px/1.1 "Newsreader", Georgia, serif; }
+.lab-notes p, .notes-home p, .scope-guide p, .scope-guide li { line-height: 1.7; overflow-wrap: anywhere; }
+.notes-home { grid-column: 1 / -1; }
+.notes-toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; margin: 24px 0; }
+.notes-toolbar label, .note-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.note-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; margin-top: 24px; }
+.note-field small { font: 14px/1.5 system-ui, sans-serif; }
+.note-field input, .note-field textarea, .notes-toolbar select { width: 100%; padding: 12px; border: 1px solid var(--line); background: var(--cream); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+.note-field textarea { resize: vertical; min-height: 100px; }
+.lab-notes [role=status] { padding: 12px; background: var(--cream); border-left: 3px solid var(--blue); }
+.scope-guide { border: 1px solid var(--line); padding: 16px; margin: 16px 0; background: var(--cream); }
+.scope-guide summary { cursor: pointer; font-weight: bold; line-height: 1.5; }
+.scope-guide li { margin: 12px 0; }
+.scope-grid small { font-size: 12px; letter-spacing: 0; line-height: 1.5; text-transform: none; }
+.scope-panel [role=status] { line-height: 1.6; overflow-wrap: anywhere; }
+.scope-panel .candidate-preview input { min-width: 0; max-width: 100%; }
+@media(max-width:600px) {
+ .note-fields { grid-template-columns: 1fr; }
+ .lab-notes { padding: 0 16px 30px; }
+ .lab-notes h1 { font-size: 36px; }
+ .notes-toolbar { align-items: stretch; flex-direction: column; }
+ .scope-guide { padding: 12px; }
+ .scope-guide ol { padding-left: 20px; }
+}
+
+.candidate-preview > p { grid-column: 1 / -1; }
