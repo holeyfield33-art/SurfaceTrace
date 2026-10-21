@@ -2,6 +2,19 @@
 
 SurfaceTrace is a human-in-the-loop attack-surface investigation cockpit for authorized web security testing. It turns captured HTTP traffic into redacted observations, normalized endpoints and inputs, identity and threat context, one-variable experiments, deterministic diffs, and hash-linked evidence. It supports passive imported comparisons and one-request-at-a-time active replay with fail-closed scope checks and explicit human approval.
 
+## NBA A/B capture workflow
+
+1. Sign in to a researcher-owned Account A in your normal browser/Burp workflow. Browse one coherent task and export a **complete HAR**.
+2. Open **Captures** in SurfaceTrace, select **Account A**, describe the workflow, and import the HAR. Repeat with a separate researcher-owned Account B. Import signed-out traffic as **Anonymous**; use **Unassigned** if the context is uncertain.
+3. Click **View HAR** on a capture card. The **VIEWING** label and endpoint review heading show which file is selected. Search its endpoints, select one, then use **Previous request** and **Next request** to browse observations. Review the capture card's hash, counts, credential fingerprints, and identity consistency warning. Correct a whole-capture assignment or an individual observation if needed.
+4. Choose the same endpoint in both captures to compare status, request authentication, and response shape. A capture labeled Account A may contain a public request with **no credentials detected**; capture identity and request authentication are separate facts. **Remove from view** archives a capture locally; expand **Archived captures** to restore it or permanently delete its stored raw HAR and derived data. Captures referenced by saved comparisons or ownership evidence cannot be archived.
+5. Record an owned object only when an A or B observation supports the relationship. SurfaceTrace stores a fingerprint of the object identifier and a link to the observation, not the value.
+6. Astra can read the local structured index at `GET /api/campaign/index` and, only when necessary, inspect the raw HAR path given in each capture record. It should propose one controlled test. Run approved GET/POST/PUT/PATCH tests manually in Burp Repeater. Use the **Controlled comparison notebook** in Captures to record the one changed input, expected rule, authorization, stop condition, and redacted Burp result. Saved comparison records form a local hash chain.
+
+Use **Open in Investigation** on a capture card to make that HAR the Command Center and Investigation source. Command Center shows the selected source. **Clear Investigation imports** removes legacy/activated Investigation inventories and their annotations while keeping private A/B captures and comparison records. The separate legacy HAR importer remains under **Replace with a separate legacy HAR**.
+
+Raw captures live in `packages/server/private-captures/<project-id>/<capture-id>/raw.har` by default (or under `SURFACETRACE_CAPTURE_ROOT` when configured). They are local private material and ignored by Git, as are all new `*.har` files. The sibling `derived.json` contains redacted structure, capture provenance, credential fingerprints, and no raw request or response bodies. The index includes a workspace-relative `rawReference` and the raw SHA-256 so Astra can locate and verify the exact source bytes. Do not commit or share raw HARs, cookies, passwords, or tokens. The old import and investigation views still work; preexisting imports without a raw source cannot be reconstructed automatically, so import their original HAR through **Captures** to add raw provenance.
+
 ## Who It Is For
 
 SurfaceTrace is for learners and testers who want a structured method for understanding web traffic, reviewing access-control and trust questions, comparing one controlled change, and keeping a reproducible investigation notebook. It complements browser DevTools, Burp Suite, and Caido; it is not a scanner or proxy replacement.

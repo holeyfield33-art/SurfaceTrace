@@ -23,6 +23,7 @@ export interface ImportResult {
   endpoints: Endpoint[];
   inputs: InputDescriptor[];
   skippedEntries: number;
+  sourceEntryIndices?: number[];
 }
 
 interface ExtractedInput {
@@ -185,7 +186,8 @@ export function importHar(har: HarFile): ImportResult {
   const endpointMap = new Map<string, Endpoint>();
   const inputMap = new Map<string, InputDescriptor>();
   let skippedEntries = 0;
-  for (const entry of har.log.entries) {
+  const sourceEntryIndices: number[] = [];
+  for (const [sourceIndex, entry] of har.log.entries.entries()) {
     const normalized = entryToObservation(entry);
     if (!normalized) {
       skippedEntries += 1;
@@ -215,6 +217,7 @@ export function importHar(har: HarFile): ImportResult {
     }
     observation.endpointId = endpoint.id;
     observations.push(observation);
+    sourceEntryIndices.push(sourceIndex);
     for (const input of observation.parsedInputs)
       addInput(inputMap, endpoint.id, input);
   }
@@ -223,6 +226,7 @@ export function importHar(har: HarFile): ImportResult {
     endpoints: [...endpointMap.values()],
     inputs: [...inputMap.values()],
     skippedEntries,
+    sourceEntryIndices,
   };
 }
 

@@ -218,7 +218,7 @@ export class SqlitePersistence {
     };
   }
 
-  investigationHash(state: PersistedState): string {
+  investigationHash(state: PersistedState, clearingImports = false): string {
     const readImportPayloads = <T>(table: string, importId: string): T[] =>
       (
         this.db
@@ -227,7 +227,7 @@ export class SqlitePersistence {
           )
           .all(importId) as Array<{ payload: string }>
       ).map((row) => JSON.parse(row.payload) as T);
-    const imports = this.listImports(state.project.id).map((record) => ({
+    const imports = (clearingImports ? [] : this.listImports(state.project.id)).map((record) => ({
       record,
       observations: readImportPayloads<Observation>("observations", record.id),
       endpoints: readImportPayloads<Endpoint>("endpoints", record.id),
@@ -268,8 +268,17 @@ export class SqlitePersistence {
     newImport = false,
     activeImportChanged = false,
     integrityAnchorHash?: string,
+    clearImports = false,
   ): void {
     this.db.transaction(() => {
+      if (clearImports) {
+        const imports = this.listImports(state.project.id);
+        for (const item of imports) {
+          for (const table of ["observations", "endpoints", "inputs"])
+            this.db.prepare(`DELETE FROM ${table} WHERE import_id = ?`).run(item.id);
+        }
+        this.db.prepare("DELETE FROM imports WHERE project_id = ?").run(state.project.id);
+      }
       this.db
         .prepare("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?")
         .run(state.project.name, state.project.updatedAt, state.project.id);

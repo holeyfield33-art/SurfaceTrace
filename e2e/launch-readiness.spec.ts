@@ -23,11 +23,12 @@ test("built application completes the guarded investigation workflow", async ({
     await page.getByRole("button", { name: surface, exact: true }).click();
   }
 
+  await page.getByText("Replace with a separate legacy HAR").click();
   await page.locator('input[type="file"]').setInputFiles(fixture);
   await expect(page.getByText("2", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "OPEN INVESTIGATION ->", exact: true }).click();
-  await expect(page.getByRole("group", { name: "Attack surface graph" })).toBeVisible();
-  await expect(page.getByText("GET /lab/projects/{id}").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "HTTP inspector" })).toBeVisible();
+  await expect(page.getByText("Path: /lab/projects/{id}")).toBeVisible();
 
   const observation = page.locator(".http-inspector select").first();
   const identity = page.getByLabel("Observed as", { exact: true });
@@ -64,6 +65,10 @@ test("built application completes the guarded investigation workflow", async ({
   await page.getByText("One changed input").locator("select").selectOption({ index: 1 });
   await page.getByText("Known value").locator("input").fill("100");
   await page.getByText("Proposed value").locator("input").fill("200");
+  await page.getByLabel("Hypothesis to test").selectOption({ index: 1 });
+  await page.getByLabel("Expected response for active request").fill("Only the owning account should see the project");
+  await page.getByLabel("Authorization for active request").fill("Both project records are controlled lab fixtures");
+  await page.getByLabel("Active stop condition").fill("Stop on unexpected private data or errors");
 
   const firstPreviewResponse = page.waitForResponse((response) =>
     response.url().includes("/api/replay/prepare"),

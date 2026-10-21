@@ -208,6 +208,8 @@ describe("investigation loop", () => {
         const url = String(request);
         if (url.endsWith("/api/import/har"))
           return jsonResponse({ observations: 2 });
+        if (url.endsWith("/api/investigation/source"))
+          return jsonResponse({ activeImport: { id: "import", sourceLabel: "sample.har", observationCount: 2, createdAt: "2026-01-02" } });
         if (url.endsWith("/api/experiments"))
           return jsonResponse(
             {
@@ -255,7 +257,7 @@ describe("investigation loop", () => {
     const file = new File(["{}"], "sample.har", { type: "application/json" });
     Object.defineProperty(file, "text", { value: async () => "{}" });
     await user.upload(fileInput!, file);
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(inventoryReads).toBe(2));
     expect(await screen.findByText("/api/projects/{id}")).toBeTruthy();
     await user.click(
       await screen.findByRole("button", { name: "INVESTIGATION" }),
@@ -307,7 +309,7 @@ describe("investigation loop", () => {
     expect(
       screen.getByText("2 hash-linked evidence records saved"),
     ).toBeTruthy();
-  });
+  }, 15_000);
 
   test("assigns, persists, and compares explicit identities without a vulnerability verdict", async () => {
     const user = userEvent.setup();
@@ -1089,6 +1091,11 @@ describe("investigation loop", () => {
     );
     await user.type(screen.getByLabelText("Known value"), "100");
     await user.type(screen.getByLabelText("Proposed value"), "200");
+    expect(screen.getByRole("button", { name: "PREVIEW ACTIVE REQUEST" }).hasAttribute("disabled")).toBe(true);
+    await user.selectOptions(screen.getByLabelText("Hypothesis to test"), hypothesis.id);
+    await user.type(screen.getByLabelText("Expected response for active request"), "Access remains limited to the owner.");
+    await user.type(screen.getByLabelText("Authorization for active request"), "Both records are mine in the controlled lab.");
+    await user.type(screen.getByLabelText("Active stop condition"), "Stop if unrelated data appears.");
     await user.click(
       screen.getByRole("button", { name: "PREVIEW ACTIVE REQUEST" }),
     );

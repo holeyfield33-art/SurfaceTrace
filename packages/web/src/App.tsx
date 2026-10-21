@@ -9,11 +9,13 @@ import {
   type SkillState,
 } from "./lessons/curriculum";
 import { LabNotes } from "./LabNotes";
+import { CaptureWorkspace } from "./CaptureWorkspace";
 import { GuidedLesson } from "./lessons/GuidedLesson";
 import { recommendLessons } from "./lessons/recommend";
 import "./inspector.css";
 
-type View = "command" | "investigation" | "classroom" | "evidence" | "notes";
+type View = "command" | "captures" | "investigation" | "classroom" | "evidence" | "notes";
+interface ActiveImport { id: string; sourceLabel: string; observationCount: number; createdAt: string }
 interface Endpoint {
   id: string;
   method: string;
@@ -234,6 +236,7 @@ interface ProjectScope {
   excludedPathPrefixes: string[];
   allowedMethods: string[];
   maxRequestsPerMinute: number;
+  minRequestIntervalMs?: number;
   stopConditions: {
     manualStop: boolean;
     maxRequestCount: number | null;
@@ -270,6 +273,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState<ProjectScope | null>(null);
+  const [activeImport, setActiveImport] = useState<ActiveImport | null>(null);
   const [skills, setSkills] = useState<Record<string, SkillState>>(() => {
     try {
       return JSON.parse(localStorage.getItem("surfacetrace:skills") ?? "{}");
@@ -295,19 +299,35 @@ export default function App() {
     : [];
   useEffect(() => {
     let active = true;
-    void fetch("/api/scope")
-      .then(async (response) =>
-        response.ok
-          ? ((await response.json()) as { scope: ProjectScope | null })
-          : null,
-      )
-      .then((result) => {
-        if (active && result) setScope(result.scope);
+    void fetch("/api/inventory")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Inventory could not be loaded");
+        return (await response.json()) as Inventory;
       })
-      .catch(() => undefined);
+      .then((result) => {
+        if (active) {
+          setInventory(result);
+          setScope(result.scope ?? null);
+        }
+      })
+      .catch(async () => {
+        try {
+          const response = await fetch("/api/scope");
+          if (!response.ok) throw new Error("Inventory could not be loaded");
+          const result = (await response.json()) as { scope: ProjectScope | null };
+          if (active) setScope(result.scope);
+        } catch (reason) {
+          if (active) setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
     return () => {
       active = false;
     };
+  }, []);
+  useEffect(() => {
+    void fetch("/api/investigation/source").then((response) => response.json())
+      .then((result: { activeImport: ActiveImport | null }) => setActiveImport(result.activeImport))
+      .catch(() => undefined);
   }, []);
 
   function chooseEndpoint(id: string): void {
@@ -331,7 +351,31 @@ export default function App() {
     const next = (await response.json()) as Inventory;
     setInventory(next);
     setScope(next.scope ?? null);
+    const sourceResponse = await fetch("/api/investigation/source");
+    if (sourceResponse.ok) setActiveImport(((await sourceResponse.json()) as { activeImport: ActiveImport | null }).activeImport);
     return next;
+  }
+  async function activateCapture(captureId: string): Promise<void> {
+    setBusy(true); setError(null);
+    try {
+      const response = await fetch(`/api/campaign/captures/${captureId}/activate`, { method: "POST" });
+      if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? "Capture could not be opened");
+      const refreshed = await refreshInventory();
+      if (refreshed.endpoints[0]) chooseEndpoint(refreshed.endpoints[0].id);
+      setView("investigation");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
+  }
+  async function clearLegacyInvestigation(): Promise<void> {
+    if (!window.confirm("Clear all imported Investigation inventories and their annotations? Private A/B captures and their saved comparisons stay available.")) return;
+    setBusy(true); setError(null);
+    try {
+      const response = await fetch("/api/investigation/imports", { method: "DELETE" });
+      if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? "Investigation could not be cleared");
+      setInventory({ ...emptyInventory, scope });
+      setActiveImport(null); setEndpointId(null); localStorage.removeItem("surfacetrace:endpoint");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
   }
   async function importFile(file: File): Promise<void> {
     setBusy(true);
@@ -340,7 +384,7 @@ export default function App() {
       const response = await fetch("/api/import/har", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ har: await file.text() }),
+        body: JSON.stringify({ har: await file.text(), sourceLabel: file.name }),
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok)
@@ -372,7 +416,7 @@ export default function App() {
         </div>
       </header>
       <nav className="primary-nav" aria-label="Main navigation">
-        {(["command", "investigation", "classroom", "notes", "evidence"] as View[]).map(
+        {(["command", "captures", "investigation", "classroom", "notes", "evidence"] as View[]).map(
           (item) => (
             <button
               key={item}
@@ -385,6 +429,7 @@ export default function App() {
         )}
       </nav>
       <LabNotes active={view === "notes"} />
+      {view === "captures" && <CaptureWorkspace onActivate={activateCapture} />}
       {view === "command" && (
         <CommandCenter
           inventory={inventory}
@@ -396,9 +441,13 @@ export default function App() {
           onImport={importFile}
           onNotes={() => setView("notes")}
           onInvestigate={() => setView("investigation")}
+          onChooseEndpoint={(id) => { chooseEndpoint(id); setView("investigation"); }}
+          onCaptures={() => setView("captures")}
           onLesson={(item) => openLesson(item, "command")}
           scope={scope}
           onScope={setScope}
+          activeImport={activeImport}
+          onClearInvestigation={clearLegacyInvestigation}
         />
       )}
       {view === "investigation" && (
@@ -442,10 +491,14 @@ function CommandCenter({
   error,
   onImport,
   onInvestigate,
+  onChooseEndpoint,
+  onCaptures,
   onNotes,
   onLesson,
   scope,
   onScope,
+  activeImport,
+  onClearInvestigation,
 }: {
   inventory: Inventory;
   endpoint?: Endpoint;
@@ -455,11 +508,33 @@ function CommandCenter({
   error: string | null;
   onImport: (file: File) => void;
   onInvestigate: () => void;
+  onChooseEndpoint: (id: string) => void;
+  onCaptures: () => void;
   onNotes: () => void;
   onLesson: (lesson: Lesson) => void;
   scope: ProjectScope | null;
   onScope: (scope: ProjectScope) => void;
+  activeImport: ActiveImport | null;
+  onClearInvestigation: () => void;
 }) {
+  const triage = inventory.endpoints.map((item) => {
+    const observations = inventory.observations.filter((entry) => entry.endpointId === item.id);
+    const path = item.pathTemplate.toLowerCase();
+    const publicFeed = /\/static\/|\/logos\/|\.(js|css|svg|png|jpg|woff2?|json)$/.test(path) || /scoreboard|standings/.test(path);
+    const accountSurface = /profile|account|user|session|entitlement|preferences|settings|wallet/i.test(path);
+    const stateChange = ["POST", "PUT", "PATCH", "DELETE"].includes(item.method);
+    const auth = observations.some((entry) => entry.identityId || Object.keys(entry.http?.request.headers ?? {}).some((name) => ["authorization", "cookie"].includes(name.toLowerCase())));
+    const reasons = [
+      accountSurface ? "Account or identity path" : null,
+      auth ? "Authentication marker present" : null,
+      stateChange ? "State-changing method" : null,
+      item.statusCodes.some((status) => status >= 400) ? "Error response observed" : null,
+    ].filter((reason): reason is string => Boolean(reason));
+    const score = (accountSurface ? 5 : 0) + (auth ? 3 : 0) + (stateChange ? 2 : 0) + (item.statusCodes.some((status) => status >= 400) ? 1 : 0) - (publicFeed ? 6 : 0);
+    return { item, score, reasons, publicFeed, accountSurface, auth };
+  }).filter((candidate) => !candidate.publicFeed && (candidate.accountSurface || candidate.auth))
+    .sort((a, b) => b.score - a.score || a.item.pathTemplate.localeCompare(b.item.pathTemplate))
+    .slice(0, 5);
   return (
     <main className="dashboard reveal">
       <section className="panel summary-panel">
@@ -470,6 +545,10 @@ function CommandCenter({
           <Metric value={inventory.hypotheses.length} label="HYPOTHESES" />
           <Metric value={inventory.evidence.length} label="EVIDENCE" />
         </div>
+        <div className="capture-observation"><strong>Investigation source</strong><p>{activeImport ? activeImport.sourceLabel : "No HAR selected for Investigation"}</p>{activeImport && <small>{activeImport.observationCount} observations · selected {activeImport.createdAt}</small>}</div>
+        <button className="action" onClick={onCaptures}>CHOOSE ACCOUNT A/B HAR TO INVESTIGATE</button>
+        {activeImport && <button disabled={busy} onClick={onClearInvestigation}>CLEAR INVESTIGATION IMPORTS</button>}
+        <details><summary>Replace with a separate legacy HAR</summary>
         <label className="import-control">
           <input
             type="file"
@@ -480,8 +559,9 @@ function CommandCenter({
               if (file) onImport(file);
             }}
           />
-          <span>{busy ? "NORMALIZING..." : "IMPORT AUTHORIZED HAR"}</span>
+          <span>{busy ? "NORMALIZING..." : "REPLACE INVESTIGATION HAR"}</span>
         </label>
+        <small>This creates another import and changes the Investigation source. Use Captures for Account A/B evidence.</small></details>
         {error && <p className="error">{error}</p>}
       </section>
       <section className="panel focus-panel">
@@ -506,21 +586,15 @@ function CommandCenter({
         )}
       </section>
       <section className="panel queue-panel">
-        <PanelLabel number="03" label="INVESTIGATION QUEUE" />
-        {inventory.hypotheses.slice(0, 4).map((item) => (
-          <div className="queue-item" key={item.id}>
-            <span className={item.priority >= 7 ? "risk high" : "risk medium"}>
-              {item.priority >= 7 ? "HIGH" : "MED"}
-            </span>
-            <div>
-              <strong>{item.signal.replaceAll("-", " ")}</strong>
-              <small>HYPOTHESIS / NOT A FINDING</small>
-            </div>
-          </div>
+        <PanelLabel number="03" label="LOCAL TRIAGE ASSISTANT" />
+        <p>Ranks captured traffic for manual review. It uses local rules, sends no target requests, and makes no vulnerability finding.</p>
+        {triage.map(({ item, reasons }) => (
+          <button className="triage-item" key={item.id} onClick={() => onChooseEndpoint(item.id)}>
+            <strong>{item.method} {item.host}{item.pathTemplate}</strong>
+            <small>{reasons.join(" · ")}. Next: identify the object and its expected owner.</small>
+          </button>
         ))}
-        {!inventory.hypotheses.length && (
-          <Empty text="No hypotheses until traffic is imported." />
-        )}
+        {!triage.length && <Empty text="No account-oriented requests to prioritize yet. Import a capture from normal account use." />}
       </section>
       <section className="panel learning-panel">
         <PanelLabel number="04" label="RELATED LEARNING" />
@@ -664,6 +738,7 @@ function ScopePanel({
     scope?.allowedMethods.join(", ") ?? "GET",
   );
   const [rate, setRate] = useState(String(scope?.maxRequestsPerMinute ?? 10));
+  const [spacingSeconds, setSpacingSeconds] = useState(String((scope?.minRequestIntervalMs ?? 0) / 1000));
   const [active, setActive] = useState(scope?.active ?? false);
   const [manualStop, setManualStop] = useState(
     scope?.stopConditions.manualStop ?? false,
@@ -687,6 +762,7 @@ function ScopePanel({
     setExcludedPaths(scope?.excludedPathPrefixes.join(", ") ?? "");
     setMethods(scope?.allowedMethods.join(", ") ?? "GET");
     setRate(String(scope?.maxRequestsPerMinute ?? 10));
+    setSpacingSeconds(String((scope?.minRequestIntervalMs ?? 0) / 1000));
     setActive(scope?.active ?? false);
     setManualStop(scope?.stopConditions.manualStop ?? false);
     setDraftChanged(false);
@@ -702,6 +778,7 @@ function ScopePanel({
     setHosts("127.0.0.1"); setProtocols("http"); setPorts("4040");
     setAllowedPaths("/lab/projects/"); setExcludedPaths(""); setMethods("GET");
     setRate("2"); setActive(false); setManualStop(false);
+    setSpacingSeconds("0");
     setCandidateMethod("GET"); setCandidateUrl("http://127.0.0.1:4040/lab/projects/200");
     changed();
     setMessage("Local lab values filled in, not saved or enabled. Read the steps below before enabling scope.");
@@ -727,6 +804,7 @@ function ScopePanel({
           excludedPathPrefixes: csv(excludedPaths),
           allowedMethods: csv(methods),
           maxRequestsPerMinute: Number(rate),
+          minRequestIntervalMs: Number(spacingSeconds) * 1000,
           stopConditions: {
             manualStop,
             maxRequestCount: scope?.stopConditions.maxRequestCount ?? null,
@@ -919,6 +997,19 @@ function ScopePanel({
             min="1"
             value={rate}
             onChange={(event) => setRate(event.target.value)}
+          />
+        </label>
+        <label>
+          Minimum seconds between replay requests
+          <small>Enforced server-side, including after a restart. Ten seconds means at most one send in each ten-second span.</small>
+          <input
+            aria-label="Minimum seconds between replay requests"
+            type="number"
+            min="0"
+            max="60"
+            step="1"
+            value={spacingSeconds}
+            onChange={(event) => setSpacingSeconds(event.target.value)}
           />
         </label>
       </div>
@@ -1164,6 +1255,30 @@ function PaperPreviewWorksheet({
   );
 }
 
+function describeObservation(endpoint?: Endpoint, observation?: Observation): { text: string; mime: string; auth: boolean; publicLooking: boolean } {
+  const request = observation?.http?.request;
+  const response = observation?.http?.response;
+  const headers = request?.headers ?? {};
+  const responseHeaders = response?.headers ?? {};
+  const auth = Boolean(observation?.identityId || Object.keys(headers).some((name) =>
+    ["authorization", "cookie", "x-auth-token"].includes(name.toLowerCase()),
+  ) || Object.keys(request?.cookies ?? {}).length);
+  const contentType = Object.entries(responseHeaders).find(([name]) => name.toLowerCase() === "content-type")?.[1] ?? "";
+  const mime = /json/i.test(contentType) || endpoint?.pathTemplate.toLowerCase().endsWith(".json") || observation?.responseBodyShape?.toLowerCase().includes("json") ? "JSON" :
+    /html/i.test(contentType) ? "HTML" : contentType.split(";")[0] || "type unknown";
+  const publicFeed = Boolean(endpoint && /\/static\/json\/|\/scores|\/standings|\/players|\/teams/i.test(endpoint.pathTemplate));
+  const body = request?.body ? "request body present" : "no request body detected";
+  const priority = publicFeed && !auth ? "Likely public sports data; low authorization-testing priority." :
+    auth ? "Authentication context detected; check what object is accessed and who owns it." :
+      "Ownership and authorization are not yet established.";
+  return {
+    text: `${endpoint?.method ?? observation?.method ?? "Request"} request · ${publicFeed ? "public-looking feed" : mime + " response"} · ${body} · ${auth ? "authentication detected" : "no authentication detected"} · ${priority}`,
+    mime,
+    auth,
+    publicLooking: publicFeed && !auth,
+  };
+}
+
 function Investigation({
   inventory,
   current,
@@ -1211,10 +1326,26 @@ function Investigation({
     "request" | "response" | "parsed" | "diff"
   >("request");
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState("");
+  const [informational, setInformational] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("surfacetrace-informational-endpoints") ?? "{}");
+    } catch {
+      return {};
+    }
+  });
   const selectedInput = inputs.find((item) => item.id === inputId);
   const inspected =
     observations.find((item) => item.id === inspectorObservationId) ??
     observations[0];
+  const summary = describeObservation(current, inspected);
+  const isInformational = Boolean(current && informational[current.id]);
+  const assignedIdentities = new Set(observations.map((item) => item.identityId).filter(Boolean));
+  function classifyInformational(value: boolean): void {
+    if (!current) return;
+    const next = { ...informational, [current.id]: value };
+    setInformational(next);
+    localStorage.setItem("surfacetrace-informational-endpoints", JSON.stringify(next));
+  }
   const ready = Boolean(
     hypothesisId &&
     baselineId &&
@@ -1296,7 +1427,16 @@ function Investigation({
 
   return (
     <main className="investigation-page reveal">
-      <section className="graph-stage">
+      <nav className="investigation-stepper" aria-label="Investigation steps">
+        {[
+          "Observe", "Understand", "Classify", "Form hypothesis",
+          "Design test", "Send once", "Evidence",
+        ].map((step, index) => (
+          <span key={step}><b>{index + 1}</b> {step}</span>
+        ))}
+      </nav>
+      <details className="graph-stage">
+        <summary>Explore attack surface graph · {inventory.endpoints.length} endpoints</summary>
         <div className="graph-heading">
           <PanelLabel number="A" label="ATTACK SURFACE GRAPH" />
           <p>Click an endpoint node to establish focus.</p>
@@ -1350,17 +1490,26 @@ function Investigation({
             </span>
           ))}
         </div>
-      </section>
+      </details>
       <section className="investigation-detail loop-detail">
         {current ? (
           <>
-            <span className="eyebrow">CURRENT ENDPOINT</span>
-            <h1>
-              {current.method} {current.pathTemplate}
-            </h1>
-            <p className="host">
-              {current.host} / status {current.statusCodes.join(", ")}
-            </p>
+            <header className="request-focus-card">
+              <span className="eyebrow">CURRENT REQUEST</span>
+              <div className="request-focus-line">
+                <strong>{current.method}</strong>
+                <span>{current.host}</span>
+                <code>Path: {current.pathTemplate}</code>
+                <span>{inspected?.responseStatus ?? current.statusCodes.join(", ")}</span>
+                <span>{summary.mime}</span>
+                <span>Auth: {summary.auth ? "detected" : "none detected"}</span>
+              </div>
+            </header>
+            <aside className="observation-summary" aria-label="What am I looking at?">
+              <h2>What am I looking at?</h2>
+              <p>{summary.text}</p>
+              <small>This is a clue from captured traffic, not a security verdict.</small>
+            </aside>
             <HttpInspector
               observation={inspected}
               observations={observations}
@@ -1384,6 +1533,17 @@ function Investigation({
                 await onSaved();
               }}
             />
+            <div className="classification-choice">
+              <strong>Classify this observation</strong>
+              <p>Public sports data can be useful for mapping without needing an authorization hypothesis.</p>
+              <button type="button" onClick={() => classifyInformational(!isInformational)}>
+                {isInformational ? "REOPEN FOR INVESTIGATION" : "CLASSIFY AS PUBLIC / INFORMATIONAL"}
+              </button>
+              {isInformational && <p>Closed as informational in this browser. No vulnerability is claimed.</p>}
+            </div>
+            {!isInformational && <>
+            <details className="optional-annotations" open={!summary.publicLooking}>
+              <summary>{summary.publicLooking ? "Sensitive assets and trust boundaries are unlikely for this public-looking feed. Add context if evidence changes that." : "Classify sensitive assets and trust boundaries"}</summary>
             <ThreatAnnotations
               current={current}
               identities={inventory.identities}
@@ -1391,6 +1551,7 @@ function Investigation({
               boundaries={inventory.trustBoundaries ?? []}
               onSaved={onSaved}
             />
+            </details>
             <ThreatCards
               hypotheses={hypotheses}
               endpoint={current}
@@ -1403,25 +1564,19 @@ function Investigation({
               evidence={inventory.evidence}
               onSaved={onSaved}
             />
-            <IdentityComparison
+            {assignedIdentities.size >= 2 ? <IdentityComparison
               endpoint={current}
               observations={observations}
               identities={inventory.identities}
               hypothesisId={hypotheses[0]?.id}
               onSaved={onSaved}
-            />
+            /> : <p className="not-applicable">No two captured identities are assigned to this endpoint — identity comparison is not applicable yet.</p>}
             <ExperimentNotebook
               experiments={inventory.experiments ?? []}
               endpoints={inventory.endpoints}
               hypotheses={inventory.hypotheses}
               observations={inventory.observations}
               identities={inventory.identities}
-              onSaved={onSaved}
-            />
-            <ActiveReplay
-              observations={observations}
-              inputs={inputs}
-              hypotheses={hypotheses}
               onSaved={onSaved}
             />
             <h3>OBSERVED INPUTS</h3>
@@ -1559,6 +1714,13 @@ function Investigation({
               </ExperimentStep>
             </div>
             <PaperPreviewWorksheet observations={observations} inputs={inputs} />
+            <ActiveReplay
+              observations={observations}
+              inputs={inputs}
+              hypotheses={hypotheses}
+              onSaved={onSaved}
+            />
+            </>}
             {recommendations[0] && (
               <button
                 className="lesson-link"
@@ -1801,6 +1963,8 @@ function ThreatAnnotations({
           Tester-defined context only. SurfaceTrace does not infer either
           annotation.
         </p>
+        <p><b>Sensitive asset:</b> Information or a function whose disclosure or change would matter, such as private account settings. A public scoreboard is usually informational.</p>
+        <p><b>Trust boundary:</b> Where data crosses security contexts, such as a browser calling the NBA API.</p>
       </div>
       <div className="annotation-forms">
         <form
@@ -2834,6 +2998,10 @@ function ActiveReplay({
   const [inputId, setInputId] = useState("");
   const [fromValue, setFromValue] = useState("");
   const [toValue, setToValue] = useState("");
+  const [hypothesisId, setHypothesisId] = useState("");
+  const [expectedResult, setExpectedResult] = useState("");
+  const [authorizationReason, setAuthorizationReason] = useState("");
+  const [stopCondition, setStopCondition] = useState("");
   const [preview, setPreview] = useState<ReplayPreview | null>(null);
   const [result, setResult] = useState<{
     diff: DiffView;
@@ -2877,7 +3045,7 @@ function ActiveReplay({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           baselineObservationId: baselineId,
-          hypothesisId: hypotheses[0]?.id ?? null,
+          hypothesisId: hypothesisId || null,
           mutation: changed,
         }),
       });
@@ -2929,10 +3097,10 @@ function ActiveReplay({
     <section className="active-replay">
       <header>
         <span>ACTIVE REQUEST</span>
-        <h2>Preview. Approve. Send once.</h2>
+        <h2>6. Preview, approve, send once.</h2>
         <p>
-          No redirect follows and no retries. Scope and rate gates are rechecked
           at send time.
+          Complete the hypothesis and test plan below before previewing. No redirect follows and no retries. Scope and rate gates are rechecked at send time.
         </p>
       </header>
       {!preview && !result && (
@@ -2974,9 +3142,23 @@ function ActiveReplay({
               />
             </label>
           </div>
+          <div className="replay-reasoning">
+            <label>
+              Hypothesis to test
+              <select value={hypothesisId} onChange={(event) => setHypothesisId(event.target.value)}>
+                <option value="">Select a documented hypothesis</option>
+                {hypotheses.filter((item) => item.status !== "closed").map((item) =>
+                  <option key={item.id} value={item.id}>{item.question}</option>
+                )}
+              </select>
+            </label>
+            <label>Expected response for active request<textarea value={expectedResult} onChange={(event) => setExpectedResult(event.target.value)} placeholder="What should the server return if the rule is enforced?" /></label>
+            <label>Authorization for active request<textarea value={authorizationReason} onChange={(event) => setAuthorizationReason(event.target.value)} placeholder="Why is this request permitted, and who owns the test data?" /></label>
+            <label>Active stop condition<textarea value={stopCondition} onChange={(event) => setStopCondition(event.target.value)} placeholder="What observation will make you stop immediately?" /></label>
+          </div>
           <button
             className="compare-button"
-            disabled={busy || !baselineId || !inputId || !fromValue || !toValue}
+            disabled={busy || !baselineId || !inputId || !fromValue || !toValue || fromValue === toValue || !hypothesisId || !expectedResult.trim() || !authorizationReason.trim() || !stopCondition.trim()}
             onClick={() => void prepare()}
           >
             {busy ? "PREPARING..." : "PREVIEW ACTIVE REQUEST"}

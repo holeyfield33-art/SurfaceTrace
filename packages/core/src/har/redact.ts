@@ -24,6 +24,7 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 const SENSITIVE_QUERY_NAMES = new Set([
   "token",
+  "jwt",
   "access_token",
   "refresh_token",
   "api_key",
@@ -66,7 +67,7 @@ const URL_VALUE_HEADERS = new Set([
   "x-rewrite-url",
 ]);
 const SENSITIVE_TEXT_FIELD =
-  "(?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization[_-]?code|auth[_-]?code|api[_-]?key|private[_-]?key|password|passwd|passphrase|credential(?:s)?|authorization|session|secret|token|assertion|saml[_-]?response|signature|ticket|code)";
+  "(?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization[_-]?code|auth[_-]?code|api[_-]?key|private[_-]?key|password|passwd|passphrase|credential(?:s)?|authorization|session|secret|token|jwt|assertion|saml[_-]?response|signature|ticket|code)";
 
 export function isSensitiveHeader(name: string): boolean {
   const lower = name.trim().toLowerCase();

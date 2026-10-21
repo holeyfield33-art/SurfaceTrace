@@ -53,7 +53,7 @@ export function isRequestInScope(
   if (context.rateAvailable === false)
     return deny(
       "RATE_LIMIT_EXHAUSTED",
-      "Project request budget is exhausted for this minute",
+      "Project request rate or minimum spacing limit is active",
       "maxRequestsPerMinute",
     );
 
@@ -133,8 +133,11 @@ export class RequestBudget {
 
   canConsumeRequest(scope: ProjectScope, now = Date.now()): boolean {
     this.prune(scope.id, now);
+    const events = this.consumed.get(scope.id) ?? [];
+    const last = events.at(-1);
     return (
-      (this.consumed.get(scope.id)?.length ?? 0) < scope.maxRequestsPerMinute
+      events.length < scope.maxRequestsPerMinute &&
+      (last === undefined || now - last >= (scope.minRequestIntervalMs ?? 0))
     );
   }
 

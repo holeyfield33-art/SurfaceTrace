@@ -256,6 +256,7 @@ export const requestSchemas = {
           uniqueItems: true,
         },
         maxRequestsPerMinute: { type: "integer", minimum: 1, maximum: 10_000 },
+        minRequestIntervalMs: { type: "integer", minimum: 0, maximum: 60_000 },
         stopConditions: scopeStopConditions,
         notes,
       },

@@ -1,6 +1,9 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { timingSafeEqual } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import {
   EvidenceLedger,
   RequestBudget,
@@ -60,6 +63,7 @@ import {
   type ImportReplacementSummary,
 } from "./importLifecycle.js";
 import { requestSchemas } from "./requestSchemas.js";
+import { CampaignCaptureVault, validCaptureIdentity, type CaptureIdentity, type ObservationClassification } from "./campaignCaptures.js";
 
 interface StateIntegrityPayload {
   event: "investigation_state_anchored";
@@ -160,6 +164,7 @@ export interface AppOptions {
   replayTimeoutMs?: number;
   maxReplayResponseBytes?: number;
   apiToken?: string;
+  captureRoot?: string;
 }
 
 function isLoopbackAddress(address: string): boolean {
@@ -222,7 +227,7 @@ function defaultIdentities(): IdentityContext[] {
 }
 
 export function buildApp(options: AppOptions = {}) {
-  const maxBodyBytes = options.maxBodyBytes ?? 10 * 1024 * 1024;
+  const maxBodyBytes = options.maxBodyBytes ?? 256 * 1024 * 1024;
   const maxHarEntries = options.maxHarEntries ?? 5000;
   const allowedOrigins = new Set(
     options.allowedOrigins ?? [
@@ -250,6 +255,12 @@ export function buildApp(options: AppOptions = {}) {
         ? ":memory:"
         : (process.env.SURFACETRACE_DB_PATH ?? "./data/surfacetrace.db")),
   );
+  const temporaryCaptureRoot = !options.captureRoot && process.env.NODE_ENV === "test"
+    ? mkdtempSync(join(tmpdir(), "surfacetrace-test-captures-")) : null;
+  const captureVault = new CampaignCaptureVault(
+    options.captureRoot ?? temporaryCaptureRoot ?? process.env.SURFACETRACE_CAPTURE_ROOT ?? "./private-captures",
+  );
+  app.addContentTypeParser("application/x-surfacetrace-har", { parseAs: "buffer", bodyLimit: maxBodyBytes }, (_request, body, done) => done(null, body));
   let activeProject =
     persistence.listProjects()[0] ??
     persistence.createProject("Untitled Investigation");
@@ -311,6 +322,7 @@ export function buildApp(options: AppOptions = {}) {
   }
   const requestSnapshots = new WeakMap<object, PersistedState>();
   const newImportRequests = new WeakSet<object>();
+  const clearImportRequests = new WeakSet<object>();
 
   function state(): PersistedState {
     return {
@@ -356,12 +368,12 @@ export function buildApp(options: AppOptions = {}) {
     return payload.version;
   }
 
-  function appendStateIntegrityAnchor(): string {
+  function appendStateIntegrityAnchor(clearingImports = false): string {
     const record = ledger.append("integrity", {
       event: "investigation_state_anchored",
       version: 2,
       projectId: activeProject.id,
-      stateHash: persistence.investigationHash(state()),
+      stateHash: persistence.investigationHash(state(), clearingImports),
     } satisfies StateIntegrityPayload);
     return record.contentHash;
   }
@@ -481,7 +493,8 @@ export function buildApp(options: AppOptions = {}) {
     }
     if (!apiToken && !isLoopbackAddress(request.ip))
       return reply.status(401).send({ error: "Remote API access is disabled" });
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method))
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) &&
+        (!request.url.startsWith("/campaign/captures") || request.url.endsWith("/activate")))
       requestSnapshots.set(request, structuredClone(state()));
   });
   app.addHook("preValidation", async (request, reply) => {
@@ -503,12 +516,14 @@ export function buildApp(options: AppOptions = {}) {
     ) {
       try {
         activeProject.updatedAt = new Date().toISOString();
-        const anchorHash = appendStateIntegrityAnchor();
+        const clearingImports = clearImportRequests.has(request);
+        const anchorHash = appendStateIntegrityAnchor(clearingImports);
         persistence.save(
           state(),
           newImportRequests.has(request),
           changedImportRequests.has(request),
           anchorHash,
+          clearingImports,
         );
       } catch (error) {
         restoreState(snapshot);
@@ -520,7 +535,11 @@ export function buildApp(options: AppOptions = {}) {
   });
   app.addHook("onError", async (request) => releaseActiveReplay(request));
   app.addHook("onResponse", async (request) => releaseActiveReplay(request));
-  app.addHook("onClose", async () => persistence.close());
+  app.addHook("onClose", async () => {
+    persistence.close();
+    if (temporaryCaptureRoot && resolve(temporaryCaptureRoot).startsWith(resolve(tmpdir()) + sep))
+      rmSync(temporaryCaptureRoot, { recursive: true, force: true });
+  });
 
   void app.register(cors, {
     origin(origin, callback) {
@@ -568,6 +587,115 @@ export function buildApp(options: AppOptions = {}) {
     }
     return { projects, activeProjectId: activeProject.id };
   });
+  app.get("/campaign/index", async () => {
+    const captures = captureVault.list(activeProject.id);
+    return {
+      campaign: { id: activeProject.id, name: activeProject.name },
+      identities: captureVault.identities(activeProject.id),
+      captures: captures.map((item) => item.record),
+        archivedCaptures: captureVault.archived(activeProject.id),
+      ownershipRelationships: captureVault.relationships(activeProject.id),
+      comparisons: captureVault.comparisons(activeProject.id),
+      observations: captures.flatMap((item) => item.observations),
+      endpoints: [...new Map(captures.flatMap((item) => item.endpoints).map((endpoint) => [endpoint.id, endpoint])).values()],
+      hypotheses: lastHypotheses ?? [], experiments, evidence: publicEvidence(),
+    };
+  });
+  app.post<{ Body: Buffer }>("/campaign/captures", { schema: { body: {} } }, async (request, reply) => {
+    if (activeReplayRequestCount > 0) return reply.status(409).send({ error: "Import is disabled during replay" });
+    const identity = request.headers["x-capture-identity"];
+    const filename = request.headers["x-capture-filename"];
+    const description = request.headers["x-capture-description"];
+    if (typeof identity !== "string" || !validCaptureIdentity(identity) ||
+        typeof filename !== "string" || !filename || filename.length > 255 ||
+        (description !== undefined && (typeof description !== "string" || description.length > 1000)) ||
+        !Buffer.isBuffer(request.body))
+      return reply.status(400).send({ error: "Valid capture identity, filename, and HAR body required" });
+    try {
+      const record = captureVault.import(activeProject.id, request.body, identity, filename, description ?? "");
+      return reply.status(201).send({ capture: record });
+    } catch (error) {
+      app.log.warn({ message: error instanceof Error ? error.name : "import error" }, "Capture import failed");
+      return reply.status(400).send({ error: "Capture import failed; check HAR format and local storage" });
+    }
+  });
+    app.delete<{ Params: { captureId: string } }>("/campaign/captures/:captureId", {
+      schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } } },
+    }, async (request, reply) => {
+      try { captureVault.archive(activeProject.id, request.params.captureId); return { archived: true }; }
+      catch (error) { return reply.status(error instanceof Error && error.message.includes("saved evidence") ? 409 : 404)
+        .send({ error: error instanceof Error ? error.message : "Capture could not be archived" }); }
+    });
+    app.post<{ Params: { captureId: string } }>("/campaign/captures/:captureId/restore", {
+      schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } } },
+    }, async (request, reply) => {
+      try { captureVault.restore(activeProject.id, request.params.captureId); return { restored: true }; }
+      catch { return reply.status(404).send({ error: "Archived capture not found" }); }
+    });
+    app.delete<{ Params: { captureId: string } }>("/campaign/captures/:captureId/permanent", {
+      schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } } },
+    }, async (request, reply) => {
+      try { captureVault.deleteArchived(activeProject.id, request.params.captureId); return { deleted: true }; }
+      catch { return reply.status(404).send({ error: "Archived capture not found" }); }
+    });
+    app.get<{ Params: { captureId: string } }>("/campaign/captures/:captureId/verify", {
+    schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } } },
+  }, async (request, reply) => {
+    try { return captureVault.verifyRaw(activeProject.id, request.params.captureId); }
+    catch { return reply.status(404).send({ error: "Capture not found" }); }
+  });
+  app.patch<{ Params: { captureId: string }; Body: { identity: CaptureIdentity; sequence?: number } }>(
+    "/campaign/captures/:captureId/identity",
+    { schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } }, body: { type: "object", required: ["identity"], additionalProperties: false, properties: { identity: { type: "string", enum: ["ACCOUNT_A", "ACCOUNT_B", "ANONYMOUS", "UNASSIGNED"] }, sequence: { type: "integer", minimum: 0 } } } } },
+    async (request, reply) => {
+      try { return { capture: captureVault.reassign(activeProject.id, request.params.captureId, request.body.identity, request.body.sequence) }; }
+      catch { return reply.status(404).send({ error: "Capture or observation not found" }); }
+    },
+  );
+  app.post<{ Body: { identity: CaptureIdentity; relation: "OWNS" | "USES"; objectType: string; objectValue: string; confidence: "CONFIRMED" | "PROBABLE"; evidenceObservationId: string } }>(
+    "/campaign/relationships",
+    { schema: { body: { type: "object", required: ["identity", "relation", "objectType", "objectValue", "confidence", "evidenceObservationId"], additionalProperties: false, properties: {
+      identity: { type: "string", enum: ["ACCOUNT_A", "ACCOUNT_B"] },
+      relation: { type: "string", enum: ["OWNS", "USES"] },
+      objectType: { type: "string", minLength: 1, maxLength: 80 },
+      objectValue: { type: "string", minLength: 1, maxLength: 512 },
+      confidence: { type: "string", enum: ["CONFIRMED", "PROBABLE"] },
+      evidenceObservationId: { type: "string", minLength: 1, maxLength: 256 },
+    } } } },
+    async (request, reply) => {
+      try { return reply.status(201).send({ relationship: captureVault.addRelationship(activeProject.id, request.body) }); }
+      catch { return reply.status(400).send({ error: "Relationship requires a matching owned observation" }); }
+    },
+  );
+  app.patch<{ Params: { identity: CaptureIdentity }; Body: { notes: string; evidenceObservationId?: string } }>(
+    "/campaign/identities/:identity",
+    { schema: { params: { type: "object", required: ["identity"], properties: { identity: { type: "string", enum: ["ACCOUNT_A", "ACCOUNT_B", "ANONYMOUS", "UNASSIGNED"] } } }, body: { type: "object", required: ["notes"], additionalProperties: false, properties: { notes: { type: "string", maxLength: 1000 }, evidenceObservationId: { type: "string", minLength: 1, maxLength: 256 } } } } },
+    async (request, reply) => {
+      try { return { identity: captureVault.updateIdentity(activeProject.id, request.params.identity, request.body.notes, request.body.evidenceObservationId) }; }
+      catch { return reply.status(400).send({ error: "Identity verification requires a matching observation" }); }
+    },
+  );
+  app.patch<{ Params: { observationId: string }; Body: { classification: ObservationClassification } }>(
+    "/campaign/observations/:observationId/classification",
+    { schema: { params: { type: "object", required: ["observationId"], properties: { observationId: { type: "string", minLength: 1, maxLength: 256 } } }, body: { type: "object", required: ["classification"], additionalProperties: false, properties: { classification: { type: "string", enum: ["PUBLIC_INFORMATIONAL", "ACCOUNT_SPECIFIC", "AUTHENTICATED_PRIVATE_DATA", "STATE_CHANGING", "IDENTITY_SESSION", "TOKEN_CREDENTIAL", "OBJECT_OWNERSHIP_CANDIDATE", "UNKNOWN"] } } } } },
+    async (request, reply) => {
+      try { return { observation: captureVault.classify(activeProject.id, request.params.observationId, request.body.classification) }; }
+      catch { return reply.status(404).send({ error: "Observation not found" }); }
+    },
+  );
+  app.post<{ Body: { baselineObservationId: string; resultObservationId: string; changedInput: string; baselineValueClass: string; proposedValueClass: string; expectedPolicy: string; authorization: string; stopCondition: string; resultSummary: string; conclusion: "INCONCLUSIVE" | "CONFIRMED_BOUNDARY" | "POTENTIAL_FINDING" } }>(
+    "/campaign/comparisons",
+    { schema: { body: { type: "object", required: ["baselineObservationId", "resultObservationId", "changedInput", "baselineValueClass", "proposedValueClass", "expectedPolicy", "authorization", "stopCondition", "resultSummary", "conclusion"], additionalProperties: false, properties: {
+      baselineObservationId: { type: "string", minLength: 1, maxLength: 256 }, resultObservationId: { type: "string", minLength: 1, maxLength: 256 },
+      changedInput: { type: "string", minLength: 1, maxLength: 200 }, baselineValueClass: { type: "string", maxLength: 200 }, proposedValueClass: { type: "string", maxLength: 200 },
+      expectedPolicy: { type: "string", minLength: 1, maxLength: 1000 }, authorization: { type: "string", maxLength: 1000 }, stopCondition: { type: "string", maxLength: 1000 },
+      resultSummary: { type: "string", maxLength: 2000 }, conclusion: { type: "string", enum: ["INCONCLUSIVE", "CONFIRMED_BOUNDARY", "POTENTIAL_FINDING"] },
+    } } } },
+    async (request, reply) => {
+      try { return reply.status(201).send({ comparison: captureVault.addComparison(activeProject.id, request.body) }); }
+      catch { return reply.status(400).send({ error: "Comparison needs A/B observations for the same endpoint" }); }
+    },
+  );
   app.post<{ Body: { name?: string } }>(
     "/projects",
     { schema: requestSchemas.createProject },
@@ -608,6 +736,53 @@ export function buildApp(options: AppOptions = {}) {
       return { imports: persistence.listImports(request.params.projectId) };
     },
   );
+  app.get("/investigation/source", async () => ({ activeImport, imports: persistence.listImports(activeProject.id) }));
+  app.post<{ Params: { captureId: string } }>("/campaign/captures/:captureId/activate", {
+    schema: { params: { type: "object", required: ["captureId"], properties: { captureId: { type: "string", format: "uuid" } } } },
+  }, async (request, reply) => {
+    if (activeReplayRequestCount > 0) return reply.status(409).send({ error: "Investigation switching is disabled during replay" });
+    const capture = captureVault.list(activeProject.id).find((item) => item.record.id === request.params.captureId);
+    if (!capture) return reply.status(404).send({ error: "Capture not found" });
+    const result = { observations: capture.observations, endpoints: capture.endpoints, inputs: capture.inputs, skippedEntries: 0 };
+    const generatedHypotheses = generateHypotheses(result.endpoints, result.inputs, result.observations);
+    const reconciled = reconcileImportScopedState({
+      previousImport: lastImport, previousHypotheses: lastHypotheses, nextImport: result,
+      nextHypotheses: generatedHypotheses, identities, assets, trustBoundaries,
+      experiments, evidence: ledger.all(),
+    });
+    lastImport = result;
+    lastHypotheses = reconciled.hypotheses;
+    identities = reconciled.identities;
+    assets = reconciled.assets;
+    trustBoundaries = reconciled.trustBoundaries;
+    experiments = reconciled.experiments;
+    preparedReplays.clear();
+    activeImport = {
+      id: crypto.randomUUID(), projectId: activeProject.id, createdAt: new Date().toISOString(),
+      observationCount: result.observations.length, skippedEntryCount: 0,
+      sourceLabel: `Capture: ${capture.record.sourceFilename} (${capture.record.captureIdentity})`,
+    };
+    newImportRequests.add(request);
+    ledger.append("note", { event: "capture_activated_for_investigation", captureId: capture.record.id, importId: activeImport.id });
+    refreshGraph();
+    return { activeImport };
+  });
+  app.delete("/investigation/imports", async (request, reply) => {
+    if (activeReplayRequestCount > 0) return reply.status(409).send({ error: "Investigation clearing is disabled during replay" });
+    const removed = persistence.listImports(activeProject.id).length;
+    activeImport = null;
+    lastImport = null;
+    lastGraph = null;
+    lastHypotheses = null;
+    identities = defaultIdentities();
+    assets = [];
+    trustBoundaries = [];
+    experiments = [];
+    preparedReplays.clear();
+    clearImportRequests.add(request);
+    ledger.append("note", { event: "investigation_imports_cleared", removedImportCount: removed });
+    return { cleared: true, removedImportCount: removed };
+  });
   app.post<{ Body: { har: string; sourceLabel?: string } }>(
     "/import/har",
     { schema: requestSchemas.importHar },
@@ -642,6 +817,14 @@ export function buildApp(options: AppOptions = {}) {
           detail: error instanceof Error ? error.message : String(error),
         });
       }
+      // Legacy imports remain usable; preserve their original bytes as an unassigned capture.
+      captureVault.import(
+        activeProject.id,
+        Buffer.from(raw, "utf8"),
+        "UNASSIGNED",
+        request.body.sourceLabel?.trim() || "legacy-import.har",
+        "Imported through the legacy redacted workflow",
+      );
       const generatedHypotheses = generateHypotheses(
         result.endpoints,
         result.inputs,
@@ -783,6 +966,9 @@ export function buildApp(options: AppOptions = {}) {
       methods.some((item) => !HTTP_METHODS.has(item as HttpMethod)) ||
       !Number.isInteger(body.maxRequestsPerMinute) ||
       Number(body.maxRequestsPerMinute) < 1 ||
+      (body.minRequestIntervalMs !== undefined &&
+        (!Number.isInteger(body.minRequestIntervalMs) ||
+          body.minRequestIntervalMs < 0 || body.minRequestIntervalMs > 60_000)) ||
       (body.stopConditions?.maxRequestCount !== null &&
         body.stopConditions?.maxRequestCount !== undefined &&
         (!Number.isInteger(body.stopConditions.maxRequestCount) ||
@@ -804,6 +990,7 @@ export function buildApp(options: AppOptions = {}) {
       excludedPathPrefixes: excludedPaths,
       allowedMethods: methods as HttpMethod[],
       maxRequestsPerMinute: Number(body.maxRequestsPerMinute),
+      minRequestIntervalMs: body.minRequestIntervalMs ?? previous?.minRequestIntervalMs ?? 0,
       rateWindowTimestamps: previous?.rateWindowTimestamps ?? [],
       stopConditions: {
         manualStop: body.stopConditions?.manualStop === true,

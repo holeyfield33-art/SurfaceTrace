@@ -2,6 +2,7 @@ export * from "./types.js";
 
 export { parseHarJson, importHar } from "./har/importHar.js";
 export type { ImportResult } from "./har/importHar.js";
+export type { HarEntry, HarFile } from "./har/types.js";
 export {
   toPathTemplate,
   extractPathParams,

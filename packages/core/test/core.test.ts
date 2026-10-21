@@ -48,6 +48,7 @@ describe("redaction", () => {
   );
   test.each([
     "token",
+    "jwt",
     "access_token",
     "refresh_token",
     "password",
@@ -69,6 +70,10 @@ describe("redaction", () => {
     expect(bodyShape('{"profile":{"password":"private"}}')).toBe(
       '{"profile":{"password":"[REDACTED]"}}',
     );
+  });
+  test("redacts JWT fields in response JSON", () => {
+    expect(redactBody('{"data":{"jwt":"secret-jwt"}}', "application/json"))
+      .not.toContain("secret-jwt");
   });
   test("sanitizes secret-bearing URLs", () => {
     expect(
@@ -1153,6 +1158,17 @@ describe("runtime scope decision", () => {
     restored.restore(configured.id, budget.snapshot(configured.id, 3_000));
     expect(restored.canConsumeRequest(configured, 3_000)).toBe(false);
     expect(budget.canConsumeRequest(configured, 62_000)).toBe(true);
+  });
+
+  test("enforces minimum spacing between sends and restores it after restart", () => {
+    const configured = scope({ maxRequestsPerMinute: 6, minRequestIntervalMs: 10_000 });
+    const budget = new RequestBudget();
+    expect(budget.consumeRequest(configured, 100_000)).toBe(true);
+    expect(budget.canConsumeRequest(configured, 109_999)).toBe(false);
+    const restored = new RequestBudget();
+    restored.restore(configured.id, budget.snapshot(configured.id, 109_999));
+    expect(restored.canConsumeRequest(configured, 109_999)).toBe(false);
+    expect(restored.consumeRequest(configured, 110_000)).toBe(true);
   });
 
   test.each([

@@ -111,6 +111,7 @@ export interface ProjectScope {
   excludedPathPrefixes: string[];
   allowedMethods: HttpMethod[];
   maxRequestsPerMinute: number;
+  minRequestIntervalMs?: number;
   rateWindowTimestamps?: number[];
   stopConditions: ScopeStopConditions;
   notes: string | null;

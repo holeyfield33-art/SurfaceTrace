@@ -50,6 +50,13 @@ data/
 *.har
 !fixtures/**/*.har
 !e2e/fixtures/*.har
+private-captures/
+**/private-captures/
+
+# Private campaign / bounty material (never publish)
+docs/NBA_*.md
+docs/*bug hunt*
+*.code-workspace
 
 # Evidence & redacted artifacts (keep out of git by default)
 evidence/
