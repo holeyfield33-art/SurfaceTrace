@@ -2,7 +2,9 @@
 
 SurfaceTrace is a human-in-the-loop attack-surface investigation cockpit for authorized web security testing. It turns captured HTTP traffic into redacted observations, normalized endpoints and inputs, identity and threat context, one-variable experiments, deterministic diffs, and hash-linked evidence. It supports passive imported comparisons and one-request-at-a-time active replay with fail-closed scope checks and explicit human approval.
 
-## NBA A/B capture workflow
+## A/B capture workflow (any target)
+
+Intake is target-agnostic. Each campaign (project) has an **Intake profile** (Captures → *Intake profile for this campaign*, or `GET/PUT /api/campaign/profile`) holding the target-specific rules: which hosts to scan for credentials, auth-cookie and token-field patterns, the profile/whoami paths used to verify which person a capture belongs to, out-of-scope hosts, and extra credential names to scrub from notes. Defaults are generic (any host, common session/token/auth cookie names, `/api/me`-style profile paths); tune them per program before importing. Changes apply to captures imported afterwards. The profile is stored at `<capture-root>/<project-id>/profile.json`.
 
 1. Sign in to a researcher-owned Account A in your normal browser/Burp workflow. Browse one coherent task and export a **complete HAR**.
 2. Open **Captures** in SurfaceTrace, select **Account A**, describe the workflow, and import the HAR. Repeat with a separate researcher-owned Account B. Import signed-out traffic as **Anonymous**; use **Unassigned** if the context is uncertain.

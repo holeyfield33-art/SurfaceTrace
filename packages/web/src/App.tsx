@@ -1964,7 +1964,7 @@ function ThreatAnnotations({
           annotation.
         </p>
         <p><b>Sensitive asset:</b> Information or a function whose disclosure or change would matter, such as private account settings. A public scoreboard is usually informational.</p>
-        <p><b>Trust boundary:</b> Where data crosses security contexts, such as a browser calling the NBA API.</p>
+        <p><b>Trust boundary:</b> Where data crosses security contexts, such as a browser calling a backend API.</p>
       </div>
       <div className="annotation-forms">
         <form

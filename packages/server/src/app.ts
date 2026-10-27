@@ -494,7 +494,7 @@ export function buildApp(options: AppOptions = {}) {
     if (!apiToken && !isLoopbackAddress(request.ip))
       return reply.status(401).send({ error: "Remote API access is disabled" });
     if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) &&
-        (!request.url.startsWith("/campaign/captures") || request.url.endsWith("/activate")))
+        ((!request.url.startsWith("/campaign/captures") && !request.url.startsWith("/campaign/profile")) || request.url.endsWith("/activate")))
       requestSnapshots.set(request, structuredClone(state()));
   });
   app.addHook("preValidation", async (request, reply) => {
@@ -591,6 +591,7 @@ export function buildApp(options: AppOptions = {}) {
     const captures = captureVault.list(activeProject.id);
     return {
       campaign: { id: activeProject.id, name: activeProject.name },
+      profile: captureVault.profile(activeProject.id),
       identities: captureVault.identities(activeProject.id),
       captures: captures.map((item) => item.record),
         archivedCaptures: captureVault.archived(activeProject.id),
@@ -601,6 +602,19 @@ export function buildApp(options: AppOptions = {}) {
       hypotheses: lastHypotheses ?? [], experiments, evidence: publicEvidence(),
     };
   });
+  app.get("/campaign/profile", async () => ({ profile: captureVault.profile(activeProject.id) }));
+  app.put<{ Body: Record<string, unknown> }>("/campaign/profile", { schema: { body: {
+    type: "object", additionalProperties: false, properties: {
+      credentialHosts: { type: "array", maxItems: 100, items: { type: "string", maxLength: 253 } },
+      authCookiePattern: { type: "string", maxLength: 300 },
+      tokenFieldPattern: { type: "string", maxLength: 300 },
+      profilePaths: { type: "array", maxItems: 50, items: { type: "string", maxLength: 200 } },
+      profileIdFields: { type: "array", maxItems: 20, items: { type: "string", maxLength: 80 } },
+      excludedHosts: { type: "array", maxItems: 200, items: { type: "string", maxLength: 253 } },
+      extraRedactNames: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+      scopeNote: { type: "string", maxLength: 500 },
+    },
+  } } }, async (request) => ({ profile: captureVault.setProfile(activeProject.id, request.body) }));
   app.post<{ Body: Buffer }>("/campaign/captures", { schema: { body: {} } }, async (request, reply) => {
     if (activeReplayRequestCount > 0) return reply.status(409).send({ error: "Import is disabled during replay" });
     const identity = request.headers["x-capture-identity"];

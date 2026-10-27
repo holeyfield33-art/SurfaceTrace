@@ -55,6 +55,7 @@ private-captures/
 
 # Private campaign / bounty material (never publish)
 docs/NBA_*.md
+docs/campaigns/
 docs/*bug hunt*
 *.code-workspace
 
